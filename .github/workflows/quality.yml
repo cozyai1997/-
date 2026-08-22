@@ -1,0 +1,35 @@
+name: 품질 검사
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 소스 받기
+        uses: actions/checkout@v4
+      - name: pnpm 준비
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+      - name: Node.js 준비
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: 의존성 설치
+        run: pnpm install --frozen-lockfile
+      - name: 정적 검사
+        run: pnpm lint && pnpm typecheck
+      - name: 단위 시험
+        run: pnpm test
+      - name: 빌드
+        run: pnpm build
+

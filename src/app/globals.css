@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+:root {
+  --background: #08111f;
+  --surface: #0d1929;
+  --surface-strong: #122238;
+  --border: #24364e;
+  --text: #edf4ff;
+  --muted: #91a3bc;
+  --accent: #3b82f6;
+  --accent-soft: #152f55;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: var(--background);
+  color-scheme: dark;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 80% 0%, rgb(38 78 128 / 24%), transparent 36rem),
+    var(--background);
+  color: var(--text);
+  font-family: "Malgun Gothic", "맑은 고딕", system-ui, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid #7db4ff;
+  outline-offset: 3px;
+}
+
+.root-header {
+  display: flex;
+  min-height: 4rem;
+  align-items: center;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding: 0 1.25rem;
+  background: rgb(8 17 31 / 88%);
+  backdrop-filter: blur(16px);
+}
+
+.brand-mark {
+  display: inline-grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: 0.6rem;
+  background: linear-gradient(145deg, #60a5fa, #2563eb);
+  color: #fff;
+  font-weight: 800;
+}
+
+.root-brand {
+  font-size: 0.95rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.unofficial-label {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.welcome-panel {
+  width: min(60rem, calc(100% - 2rem));
+  margin: 5rem auto;
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  padding: clamp(1.5rem, 6vw, 4rem);
+  background: linear-gradient(150deg, rgb(18 34 56 / 96%), rgb(10 22 38 / 96%));
+  box-shadow: 0 2rem 5rem rgb(0 0 0 / 28%);
+}
+
+.welcome-panel h1 {
+  max-width: 18ch;
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 4.5rem);
+  line-height: 1.08;
+  letter-spacing: -0.05em;
+}
+
+.welcome-panel p:not(.eyebrow) {
+  max-width: 44rem;
+  margin: 1.5rem 0 0;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.8;
+}
+
+.eyebrow {
+  margin: 0 0 1rem;
+  color: #86b9ff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+@media (max-width: 640px) {
+  .unofficial-label {
+    display: none;
+  }
+
+  .welcome-panel {
+    margin-top: 2rem;
+  }
+}
+
