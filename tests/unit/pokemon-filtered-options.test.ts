@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -5,7 +6,9 @@ import {
   groupAbilityOptions,
   groupMoveOptions,
   learnMethodLabelKo,
+  listPokemonFilteredOptions,
 } from '@/features/owned-pokemon/repository'
+import type { Database } from '@/types/database.generated'
 
 describe('포켓몬 필터 표시 라벨', () => {
   it('지원하는 획득 경로를 닫힌 순서의 한국어로 변환한다', () => {
@@ -144,5 +147,98 @@ describe('종별 기술 선택지', () => {
         routes: [{ methodKo: '유전', conditionKo: '유전으로 습득' }],
       },
     ])
+  })
+})
+
+describe('필터 저장소 요청 순서', () => {
+  it('독립적인 폼과 종별 기술 요청을 둘 다 소비한 뒤 어느 하나를 해결한다', async () => {
+    const events: string[] = []
+    const consumedIndependent = new Set<string>()
+    const payloads: Record<string, unknown> = {
+      reference_forms: {
+        data: { id: 'exact', species_id: 'species', base_form_id: 'base' },
+        error: null,
+      },
+      reference_move_learnsets: {
+        data: [{
+          learn_method: 'level',
+          condition_ko: '레벨 1에 습득',
+          reference_moves: {
+            id: 'move',
+            name_ko: '몸통박치기',
+            description_ko: '상대에게 부딪친다.',
+            damage_class: 'physical',
+            power: 40,
+            accuracy: 100,
+            pp: 35,
+            is_active: true,
+            reference_types: { name_ko: '노말' },
+          },
+        }],
+        error: null,
+      },
+      reference_form_abilities: {
+        data: [{
+          form_id: 'exact',
+          is_hidden: false,
+          reference_abilities: {
+            id: 'ability',
+            name_ko: '적응력',
+            description_ko: '같은 타입 기술이 강해진다.',
+            is_active: true,
+          },
+        }],
+        error: null,
+      },
+    }
+
+    function lazyQuery(table: string) {
+      const query = {
+        select() { return query },
+        eq() { return query },
+        maybeSingle() { return query },
+        in() { return query },
+        then(
+          onFulfilled: (value: unknown) => unknown,
+          onRejected: (reason: unknown) => unknown,
+        ) {
+          events.push(`consume:${table}`)
+          if (table === 'reference_forms' || table === 'reference_move_learnsets') {
+            consumedIndependent.add(table)
+          }
+          return Promise.resolve()
+            .then(() => {
+              if (
+                (table === 'reference_forms' || table === 'reference_move_learnsets')
+                && consumedIndependent.size !== 2
+              ) {
+                throw new Error('독립 요청 둘을 먼저 소비해야 합니다.')
+              }
+              events.push(`resolve:${table}`)
+              return payloads[table]
+            })
+            .then(onFulfilled, onRejected)
+        },
+      }
+      return query
+    }
+
+    const client = {
+      from(table: string) {
+        return lazyQuery(table)
+      },
+    } as unknown as SupabaseClient<Database>
+
+    const result = await listPokemonFilteredOptions(client, 'species', 'exact')
+
+    const firstResolution = events.findIndex((event) => event.startsWith('resolve:'))
+    expect(events.slice(0, firstResolution)).toEqual([
+      'consume:reference_forms',
+      'consume:reference_move_learnsets',
+    ])
+    expect(result).toMatchObject({
+      abilities: [{ id: 'ability', nameKo: '적응력' }],
+      moves: [{ id: 'move', nameKo: '몸통박치기' }],
+    })
   })
 })

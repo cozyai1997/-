@@ -226,9 +226,10 @@ export async function listPokemonFilteredOptions(
     `)
     .eq('species_id', speciesId)
 
-  const formResult = await formRequest
+  const [formResult, learnsetResult] = await Promise.all([formRequest, learnsetRequest])
   if (formResult.error) throw formResult.error
   if (!formResult.data) throw new Error('선택한 종에 해당하는 모습을 찾지 못했습니다.')
+  if (learnsetResult.error) throw learnsetResult.error
 
   const formIds = formResult.data.base_form_id
     ? [formId, formResult.data.base_form_id]
@@ -241,9 +242,8 @@ export async function listPokemonFilteredOptions(
       reference_abilities!inner(id, name_ko, description_ko, is_active)
     `)
     .in('form_id', formIds)
-  const [abilityResult, learnsetResult] = await Promise.all([abilityRequest, learnsetRequest])
+  const abilityResult = await abilityRequest
   if (abilityResult.error) throw abilityResult.error
-  if (learnsetResult.error) throw learnsetResult.error
 
   return {
     abilities: groupAbilityOptions(
