@@ -149,6 +149,21 @@ describe('사용자별 보유 포켓몬 RLS', () => {
   })
 
   it('다른 사용자의 행을 수정하거나 삭제하지 못한다', async () => {
+    const corrected = await bob.client.rpc('correct_owned_pokemon', {
+      p_owned_pokemon_id: pokemonId,
+      p_species_id: speciesId,
+      p_form_id: formId,
+      p_captured_on: '2026-08-17',
+      p_original_iv: {
+        hp: 0,
+        attack: 0,
+        defense: 0,
+        special_attack: 0,
+        special_defense: 0,
+        speed: 0,
+      },
+      p_reason_ko: '다른 사용자 정보 정정 시도',
+    })
     const updated = await bob.client
       .from('owned_pokemon')
       .update({ nickname: '가로챈 이브이' })
@@ -156,6 +171,7 @@ describe('사용자별 보유 포켓몬 RLS', () => {
       .select('id')
     const deleted = await bob.client.from('owned_pokemon').delete().eq('id', pokemonId).select('id')
 
+    expect(corrected.error?.code).toBe('42501')
     expect(updated.error).toBeNull()
     expect(updated.data).toEqual([])
     expect(deleted.error).toBeNull()

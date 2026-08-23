@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import type { Route } from 'next'
 
 import { listOwnedPokemon } from '@/features/owned-pokemon/repository'
 import { createClient } from '@/lib/supabase/server'
@@ -20,6 +21,13 @@ export default async function MyPokemonPage() {
               <h2>{item.nickname || item.nameKo}</h2>
               <p>{item.nameKo} · {item.formNameKo}</p>
               <span>Lv. {item.level}</span>
+              <Link
+                className="card-link"
+                href={`/my-pokemon/detail?dex=${String(item.nationalDexNumber).padStart(4, '0')}&entry=${item.entry}` as Route}
+                aria-label={`${item.nickname || item.nameKo} 상세 보기`}
+              >
+                상세 보기
+              </Link>
             </article>
           ))}
         </section>

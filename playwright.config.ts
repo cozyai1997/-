@@ -39,18 +39,21 @@ function readLocalSupabaseEnvironment() {
 
 const testEnvironment = readLocalSupabaseEnvironment()
 Object.assign(process.env, testEnvironment)
-const webServerEnvironment = Object.fromEntries(
-  Object.entries(testEnvironment).filter(
-    (entry): entry is [string, string] =>
-      typeof entry[1] === 'string' &&
-      ![
-        'SUPABASE_SERVICE_ROLE_KEY',
-        'SUPABASE_SECRET_KEY',
-        'SUPABASE_ACCESS_TOKEN',
-        'SUPABASE_DB_PASSWORD',
-      ].includes(entry[0]),
+const webServerEnvironment = {
+  ...Object.fromEntries(
+    Object.entries(testEnvironment).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[1] === 'string' &&
+        ![
+          'SUPABASE_SERVICE_ROLE_KEY',
+          'SUPABASE_SECRET_KEY',
+          'SUPABASE_ACCESS_TOKEN',
+          'SUPABASE_DB_PASSWORD',
+        ].includes(entry[0]),
+    ),
   ),
-)
+  NEXT_DIST_DIR: '.next-e2e',
+}
 
 export default defineConfig({
   testDir: './tests/e2e',

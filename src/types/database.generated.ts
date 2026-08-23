@@ -784,6 +784,42 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      correct_owned_pokemon: {
+        Args: {
+          p_captured_on: string
+          p_form_id: string
+          p_original_iv: Json
+          p_owned_pokemon_id: string
+          p_reason_ko: string
+          p_species_id: string
+        }
+        Returns: {
+          ability_id: string | null
+          captured_on: string | null
+          created_at: string
+          effective_iv: Json
+          effective_nature_id: string | null
+          ev: Json
+          form_id: string
+          gender: Database["public"]["Enums"]["pokemon_gender"]
+          held_item_id: string | null
+          id: string
+          level: number
+          nickname: string | null
+          notes: string
+          original_iv: Json
+          original_nature_id: string | null
+          species_id: string
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "owned_pokemon"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       stat_block_greater_than_or_equal: {
         Args: { left_block: Json; right_block: Json }
         Returns: boolean

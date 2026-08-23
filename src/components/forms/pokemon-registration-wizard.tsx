@@ -6,8 +6,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   createOwnedPokemon,
-  listSpeciesOptions,
-  type SpeciesOption,
+  listOwnedPokemonEditOptions,
+  type OwnedPokemonEditOptions,
 } from '@/features/owned-pokemon/repository'
 import {
   createRegistrationDraft,
@@ -39,12 +39,17 @@ const statLabels = {
 export function PokemonRegistrationWizard() {
   const router = useRouter()
   const [draft, setDraft] = useState<RegistrationDraft>(createRegistrationDraft)
-  const [species, setSpecies] = useState<SpeciesOption[]>([])
+  const [options, setOptions] = useState<OwnedPokemonEditOptions>({
+    species: [],
+    natures: [],
+    abilities: [],
+    items: [],
+  })
   const [ready, setReady] = useState(false)
   const [message, setMessage] = useState('')
   const selectedSpecies = useMemo(
-    () => species.find((item) => item.id === draft.speciesId),
-    [draft.speciesId, species],
+    () => options.species.find((item) => item.id === draft.speciesId),
+    [draft.speciesId, options.species],
   )
 
   useEffect(() => {
@@ -52,9 +57,9 @@ export function PokemonRegistrationWizard() {
     queueMicrotask(() => {
       if (active) setDraft(readRegistrationDraft(sessionStorage))
     })
-    listSpeciesOptions(createClient())
-      .then((options) => {
-        if (active) setSpecies(options)
+    listOwnedPokemonEditOptions(createClient())
+      .then((loadedOptions) => {
+        if (active) setOptions(loadedOptions)
       })
       .catch(() => {
         if (active) setMessage('포켓몬 기준데이터를 불러오지 못했습니다.')
@@ -76,7 +81,7 @@ export function PokemonRegistrationWizard() {
   }
 
   function chooseSpecies(speciesId: string) {
-    const option = species.find((item) => item.id === speciesId)
+    const option = options.species.find((item) => item.id === speciesId)
     const form = option?.forms.find((item) => item.isDefault) ?? option?.forms[0]
     update({ speciesId, formId: form?.id ?? '' })
   }
@@ -126,7 +131,7 @@ export function PokemonRegistrationWizard() {
             <label htmlFor="species">포켓몬 종</label>
             <select id="species" value={draft.speciesId} onChange={(event) => chooseSpecies(event.target.value)} disabled={!ready}>
               <option value="">선택해 주세요</option>
-              {species.map((item) => (
+              {options.species.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.nameKo} · 도감번호 #{String(item.nationalDexNumber).padStart(4, '0')}
                 </option>
@@ -154,7 +159,22 @@ export function PokemonRegistrationWizard() {
           </>
         ) : null}
 
-        {draft.step === 3 ? <p>성격과 특성은 기준데이터 게시 후 한글 목록에서 선택할 수 있습니다. 지금은 미지정으로 등록됩니다.</p> : null}
+        {draft.step === 3 ? (
+          <>
+            <label htmlFor="original-nature">원본 성격</label>
+            <select id="original-nature" value={draft.originalNatureId ?? ''} onChange={(event) => update({ originalNatureId: event.target.value || null })}>
+              <option value="">미지정</option>{options.natures.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
+            </select>
+            <label htmlFor="effective-nature">현재 성격</label>
+            <select id="effective-nature" value={draft.effectiveNatureId ?? ''} onChange={(event) => update({ effectiveNatureId: event.target.value || null })}>
+              <option value="">미지정</option>{options.natures.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
+            </select>
+            <label htmlFor="ability">특성</label>
+            <select id="ability" value={draft.abilityId ?? ''} onChange={(event) => update({ abilityId: event.target.value || null })}>
+              <option value="">미지정</option>{options.abilities.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
+            </select>
+          </>
+        ) : null}
         {draft.step === 4 ? (
           <div className="stat-grid">
             {statKeys.map((key) => (
@@ -178,7 +198,15 @@ export function PokemonRegistrationWizard() {
             ))}
           </div>
         ) : null}
-        {draft.step === 6 ? <p>현재 기술과 목표 기술은 등록 후 상세 화면에서 설정할 수 있습니다.</p> : null}
+        {draft.step === 6 ? (
+          <>
+            <p>현재 기술과 목표 기술은 기술 적법성 기능에서 연결됩니다.</p>
+            <label htmlFor="held-item">지닌 도구</label>
+            <select id="held-item" value={draft.heldItemId ?? ''} onChange={(event) => update({ heldItemId: event.target.value || null })}>
+              <option value="">없음</option>{options.items.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
+            </select>
+          </>
+        ) : null}
         {draft.step === 7 ? (
           <div className="registration-summary">
             <strong>{draft.nickname || selectedSpecies?.nameKo || '이름 없음'}</strong>

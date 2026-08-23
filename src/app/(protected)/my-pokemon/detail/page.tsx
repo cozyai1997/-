@@ -1,9 +1,32 @@
-export default function PokemonDetailPage() {
+import { notFound } from 'next/navigation'
+
+import { PokemonDetailEditor } from '@/components/forms/pokemon-detail-editor'
+import {
+  getOwnedPokemonDetail,
+  listOwnedPokemonEditOptions,
+} from '@/features/owned-pokemon/repository'
+import { createClient } from '@/lib/supabase/server'
+
+type DetailPageProps = {
+  searchParams: Promise<{ dex?: string; entry?: string }>
+}
+
+export default async function PokemonDetailPage({ searchParams }: DetailPageProps) {
+  const query = await searchParams
+  const dex = Number(query.dex)
+  const entry = Number(query.entry)
+  if (!Number.isInteger(dex) || !Number.isInteger(entry) || dex < 1 || entry < 1) notFound()
+
+  const client = await createClient()
+  const [pokemon, options] = await Promise.all([
+    getOwnedPokemonDetail(client, dex, entry),
+    listOwnedPokemonEditOptions(client),
+  ])
+  if (!pokemon) notFound()
+
   return (
     <main className="owned-page">
-      <p className="eyebrow">보유 포켓몬</p>
-      <h1>포켓몬 상세</h1>
-      <p>상세 탭과 빠른 수정은 능력치·기술 기능과 함께 연결됩니다.</p>
+      <PokemonDetailEditor initialPokemon={pokemon} options={options} />
     </main>
   )
 }

@@ -360,6 +360,15 @@ kbd {
   color: var(--muted);
 }
 
+.card-link,
+.back-link {
+  display: inline-block;
+  margin-top: 0.9rem;
+  color: #8cbdff;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .dex-number {
   color: #8cbdff;
   font-size: 0.78rem;
@@ -450,6 +459,124 @@ kbd {
   min-width: 7rem;
 }
 
+.detail-heading {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 1.25rem;
+}
+
+.detail-heading h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 4vw, 3rem);
+  letter-spacing: -0.05em;
+}
+
+.detail-heading p:not(.eyebrow) {
+  color: var(--muted);
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(16rem, 0.8fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.detail-panel {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  background: var(--surface);
+}
+
+.detail-panel h2 {
+  margin: 0;
+}
+
+.detail-panel > p,
+.evolution-plan p {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.detail-form-grid,
+.correction-form {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
+.detail-form-grid label,
+.correction-form label,
+.compact-stat-grid label {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.detail-form-grid input,
+.detail-form-grid select,
+.detail-form-grid textarea,
+.correction-form input,
+.correction-form select,
+.correction-form textarea,
+.compact-stat-grid input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.65rem 0.75rem;
+  background: #07111f;
+  color: var(--text);
+}
+
+.detail-form-grid textarea,
+.correction-form textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+
+.compact-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+}
+
+.compact-stat-grid label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.evolution-plan {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--surface-strong);
+}
+
+.protected-panel {
+  margin-top: 1rem;
+  border-color: #695733;
+}
+
+.secondary-button {
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--surface-strong);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.save-message {
+  position: sticky;
+  bottom: 1rem;
+  border: 1px solid #2f654f;
+  border-radius: 0.7rem;
+  padding: 0.8rem 1rem;
+  background: #0c2d24;
+  color: #b7f7db;
+}
+
 @media (max-width: 640px) {
   .unofficial-label {
     display: none;
@@ -490,5 +617,13 @@ kbd {
 
   .primary-link {
     text-align: center;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .compact-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
