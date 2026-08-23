@@ -32,7 +32,7 @@ describe('사용자별 비공개 포켓몬 이미지', () => {
 
     const species = await admin.from('reference_species').insert({
       identifier: `image-eevee-${randomUUID()}`,
-      national_dex_number: 133,
+      national_dex_number: 9002,
       name_ko: '이브이',
       description_ko: '이미지 권한 시험용',
     }).select('id').single()

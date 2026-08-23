@@ -98,7 +98,7 @@ describe('사용자별 보유 포켓몬 RLS', () => {
     formId = randomUUID()
     const referenceData = await admin.from('reference_species').insert({
       id: speciesId,
-      national_dex_number: 133,
+      national_dex_number: 9001,
       identifier: `eevee-${speciesId}`,
       name_ko: '이브이',
       description_ko: '다양한 모습으로 진화할 가능성을 지닌 포켓몬.',
@@ -211,7 +211,7 @@ describe('사용자별 보유 포켓몬 RLS', () => {
     })
 
     expect(selected.error).toBeNull()
-    expect(selected.data).toEqual({ national_dex_number: 133, name_ko: '이브이' })
+    expect(selected.data).toEqual({ national_dex_number: 9001, name_ko: '이브이' })
     expect(inserted.error?.code).toBe('42501')
   })
 

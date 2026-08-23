@@ -74,6 +74,13 @@ function translateConditionPart(part: string, lookups: NameLookups): string | nu
   }
   match = value.match(/^Knows (.+)$/u)
   if (match) {
+    const typeMoveNames = new Map<string, string>([
+      ['Fairy move', '페어리타입 기술'],
+      ['Dark move', '악타입 기술'],
+      ['Psychic move', '에스퍼타입 기술'],
+    ])
+    const typeMoveName = typeMoveNames.get(match[1])
+    if (typeMoveName) return `${typeMoveName}을 알고 있음`
     const name = lookups.moves?.get(match[1])
     return name ? `${name} 기술을 알고 있음` : null
   }

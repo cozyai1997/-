@@ -11,6 +11,7 @@ describe('Cobbleverse 원본 조건 한국어 정규화', () => {
     ['Use Thunder Stone', '천둥의돌 사용'],
     ['Hold Metal Coat', '금속코트 지니기'],
     ['Level 20+; Female only', '레벨 20 이상; 암컷만'],
+    ['Friendship 160+; Knows Fairy move', '친밀도 160 이상; 페어리타입 기술을 알고 있음'],
   ])('%s 조건을 %s로 바꾼다', (source, expected) => {
     expect(localizeEvolutionCondition(source)).toEqual({ text: expected, translated: true })
   })
