@@ -306,6 +306,150 @@ kbd {
   font-size: 1rem;
 }
 
+.owned-page {
+  max-width: 72rem;
+  margin: 2rem auto 0;
+}
+
+.page-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.page-heading h1,
+.registration-card h1,
+.owned-page > h1 {
+  margin: 0;
+  letter-spacing: -0.04em;
+}
+
+.primary-link {
+  border-radius: 0.7rem;
+  padding: 0.75rem 1rem;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.pokemon-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.pokemon-card {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  background: linear-gradient(145deg, var(--surface-strong), var(--surface));
+}
+
+.pokemon-card h2 {
+  margin: 0.75rem 0 0;
+}
+
+.pokemon-card p,
+.pokemon-card > span:last-child,
+.registration-fields > p,
+.registration-summary span,
+.registration-summary p {
+  color: var(--muted);
+}
+
+.dex-number {
+  color: #8cbdff;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.registration-card {
+  width: min(100%, 46rem);
+  margin: 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: clamp(1.25rem, 4vw, 2rem);
+  background: var(--surface);
+}
+
+.registration-progress {
+  display: grid;
+  grid-template-columns: auto minmax(8rem, 1fr);
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  color: #8cbdff;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.registration-progress progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.registration-fields {
+  display: grid;
+  gap: 0.65rem;
+  min-height: 18rem;
+  margin-top: 1.5rem;
+  align-content: start;
+}
+
+.registration-fields label {
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.registration-fields input,
+.registration-fields select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  background: #07111f;
+  color: var(--text);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.stat-grid > div,
+.registration-summary {
+  display: grid;
+  gap: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  padding: 0.85rem;
+  background: var(--surface-strong);
+}
+
+.stat-grid span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.form-error {
+  color: #fca5a5;
+}
+
+.wizard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+}
+
+.wizard-actions .primary-button {
+  min-width: 7rem;
+}
+
 @media (max-width: 640px) {
   .unofficial-label {
     display: none;
@@ -337,5 +481,14 @@ kbd {
   .logout-button {
     margin: 0 0 0 auto;
     white-space: nowrap;
+  }
+
+  .page-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .primary-link {
+    text-align: center;
   }
 }
