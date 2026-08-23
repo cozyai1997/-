@@ -1,0 +1,15 @@
+.git/
+.next/
+.next-e2e/
+node_modules/
+.reference-data/
+.superpowers/
+.vercel/
+coverage/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo
