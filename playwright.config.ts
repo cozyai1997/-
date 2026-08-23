@@ -1,4 +1,56 @@
+import { execFileSync } from 'node:child_process'
+
 import { defineConfig, devices } from '@playwright/test'
+
+function readLocalSupabaseEnvironment() {
+  if (
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+  ) {
+    return process.env
+  }
+
+  try {
+    const output =
+      process.platform === 'win32'
+        ? execFileSync('cmd.exe', ['/d', '/s', '/c', 'supabase status -o env'], {
+            encoding: 'utf8',
+          })
+        : execFileSync('supabase', ['status', '-o', 'env'], { encoding: 'utf8' })
+    const values = Object.fromEntries(
+      output
+        .split(/\r?\n/)
+        .map((line) => line.match(/^([A-Z_]+)="(.*)"$/))
+        .filter((match): match is RegExpMatchArray => Boolean(match))
+        .map((match) => [match[1], match[2]]),
+    )
+
+    return {
+      ...process.env,
+      NEXT_PUBLIC_SUPABASE_URL: values.API_URL,
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
+        values.PUBLISHABLE_KEY ?? values.ANON_KEY,
+      SUPABASE_SERVICE_ROLE_KEY: values.SERVICE_ROLE_KEY,
+    }
+  } catch {
+    return process.env
+  }
+}
+
+const testEnvironment = readLocalSupabaseEnvironment()
+Object.assign(process.env, testEnvironment)
+const webServerEnvironment = Object.fromEntries(
+  Object.entries(testEnvironment).filter(
+    (entry): entry is [string, string] =>
+      typeof entry[1] === 'string' &&
+      ![
+        'SUPABASE_SERVICE_ROLE_KEY',
+        'SUPABASE_SECRET_KEY',
+        'SUPABASE_ACCESS_TOKEN',
+        'SUPABASE_DB_PASSWORD',
+      ].includes(entry[0]),
+  ),
+)
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -18,9 +70,9 @@ export default defineConfig({
   ],
   webServer: {
     command: 'pnpm dev',
+    env: webServerEnvironment,
     url: 'http://127.0.0.1:3000',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
 })
-
