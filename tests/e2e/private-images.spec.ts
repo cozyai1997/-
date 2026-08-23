@@ -10,6 +10,7 @@ let userId = ''
 let speciesId = ''
 let formId = ''
 let pokemonId = ''
+let nationalDexNumber = 0
 
 test.describe.serial('비공개 포켓몬 이미지', () => {
   test.beforeAll(async () => {
@@ -23,9 +24,24 @@ test.describe.serial('비공개 포켓몬 이미지', () => {
     if (created.error || !created.data.user) throw created.error ?? new Error('사용자 생성 실패')
     userId = created.data.user.id
 
+    const occupiedDexNumbers = await admin
+      .from('reference_species')
+      .select('national_dex_number')
+      .gte('national_dex_number', 7000)
+      .lte('national_dex_number', 7999)
+    if (occupiedDexNumbers.error) throw occupiedDexNumbers.error
+    const occupied = new Set(
+      occupiedDexNumbers.data.map((species) => species.national_dex_number),
+    )
+    nationalDexNumber =
+      Array.from({ length: 1000 }, (_, index) => 7000 + index).find(
+        (candidate) => !occupied.has(candidate),
+      ) ?? 0
+    if (!nationalDexNumber) throw new Error('개인 이미지 E2E 도감번호 픽스처 공간이 부족합니다.')
+
     const species = await admin.from('reference_species').insert({
       identifier: `image-eevee-${suffix}`,
-      national_dex_number: 133,
+      national_dex_number: nationalDexNumber,
       name_ko: '이브이',
       description_ko: '개인 이미지 시험용',
     }).select('id').single()
@@ -63,21 +79,28 @@ test.describe.serial('비공개 포켓몬 이미지', () => {
   })
 
   test('개인 이미지를 WebP로 저장해 표시하고 삭제하면 실루엣으로 돌아간다', async ({ page }) => {
+    const detailPath = `/my-pokemon/detail?dex=${nationalDexNumber.toString().padStart(4, '0')}&entry=1`
     await page.goto('/login')
     await page.getByLabel('이메일').fill(email)
     await page.getByLabel('비밀번호').fill(password)
     await page.getByRole('button', { name: '로그인' }).click()
     await expect(page).toHaveURL(/\/dashboard$/)
-    await page.goto('/my-pokemon/detail?dex=0133&entry=1')
+    await page.goto(detailPath)
 
     const portrait = page.getByRole('img', { name: '별빛 개인 이미지' })
     await expect(portrait).toHaveAttribute('src', '/silhouettes/default.svg')
 
-    const invalidMime = await page.request.post('/api/private-images?dex=0133&entry=1', {
+    const invalidMime = await page.request.post(`/api/private-images?${new URLSearchParams({
+      dex: nationalDexNumber.toString().padStart(4, '0'),
+      entry: '1',
+    })}`, {
       data: { mimeType: 'image/svg+xml', byteSize: 128 },
     })
     expect(invalidMime.status()).toBe(415)
-    const oversized = await page.request.post('/api/private-images?dex=0133&entry=1', {
+    const oversized = await page.request.post(`/api/private-images?${new URLSearchParams({
+      dex: nationalDexNumber.toString().padStart(4, '0'),
+      entry: '1',
+    })}`, {
       data: { mimeType: 'image/png', byteSize: 5 * 1024 * 1024 + 1 },
     })
     expect(oversized.status()).toBe(413)
@@ -93,7 +116,10 @@ test.describe.serial('비공개 포켓몬 이미지', () => {
     await expect(page.getByText('비공개 이미지를 저장했습니다.')).toBeVisible()
     await expect(portrait).not.toHaveAttribute('src', '/silhouettes/default.svg')
     expect(page.url()).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i)
-    const access = await page.request.get('/api/private-images?dex=0133&entry=1')
+    const access = await page.request.get(`/api/private-images?${new URLSearchParams({
+      dex: nationalDexNumber.toString().padStart(4, '0'),
+      entry: '1',
+    })}`)
     expect(access.status()).toBe(200)
     expect(await access.json()).toMatchObject({ expiresIn: 300 })
 
