@@ -9,6 +9,11 @@ type CsvRow = Record<string, string>
 type Localization = Record<string, string>
 type NameLookups = { items?: Map<string, string>; moves?: Map<string, string> }
 
+type FormSourceRow = Pick<CsvRow, 'FormID' | 'SpeciesID' | 'BaseFormID' | 'FormKO' | 'Type1' | 'Type2'>
+type MoveSourceRow = Pick<CsvRow, 'MoveID' | 'NameKO' | 'Type' | 'Category' | 'Power' | 'Accuracy' | 'PP'>
+type LearnsetSourceRow = Pick<CsvRow, 'SpeciesID' | 'FormID' | 'MoveID' | 'SourceType' | 'SourceValue' | 'MinLevel'>
+type FormAbilitySourceRow = Pick<CsvRow, 'FormID' | 'SpeciesID' | 'AbilityID' | 'Slot' | 'Hidden'>
+
 const itemNames = new Map<string, string>([
   ['Thunder Stone', '천둥의돌'],
   ['Water Stone', '물의돌'],
@@ -73,6 +78,55 @@ export function normalizeLearnMethod(
     return normalized as ReturnType<typeof normalizeLearnMethod>
   }
   throw new Error(`지원하지 않는 기술 습득 경로입니다: ${value}`)
+}
+
+export function normalizeFormRow(row: FormSourceRow) {
+  return {
+    id: row.FormID,
+    speciesId: row.SpeciesID,
+    baseFormId: row.BaseFormID || null,
+    nameKo: row.FormKO,
+    primaryTypeId: row.Type1 || null,
+    secondaryTypeId: row.Type2 || null,
+  }
+}
+
+export function normalizeMoveRow(
+  row: MoveSourceRow,
+  display: { nameKo: string; descriptionKo: string },
+) {
+  return {
+    id: row.MoveID,
+    nameKo: display.nameKo,
+    descriptionKo: display.descriptionKo,
+    typeId: row.Type,
+    damageClass: normalizeDamageClass(row.Category),
+    power: nullableInteger(row.Power),
+    accuracy: nullableInteger(row.Accuracy),
+    pp: nullableInteger(row.PP),
+  }
+}
+
+export function normalizeLearnsetRow(row: LearnsetSourceRow) {
+  const learnMethod = normalizeLearnMethod(row.SourceType)
+  return {
+    speciesId: row.SpeciesID,
+    formId: row.FormID || null,
+    moveId: row.MoveID,
+    learnMethod,
+    learnLevel: learnMethod === 'level' ? nullableInteger(row.SourceValue || row.MinLevel) : null,
+    conditionKo: localizeLearnsetCondition(learnMethod, row.SourceValue || row.MinLevel),
+  }
+}
+
+export function normalizeFormAbilityRow(row: FormAbilitySourceRow) {
+  return {
+    formId: row.FormID,
+    speciesId: row.SpeciesID,
+    abilityId: row.AbilityID,
+    slot: row.Slot,
+    isHidden: row.Hidden.trim().toLowerCase() === 'true',
+  }
 }
 
 function translateConditionPart(part: string, lookups: NameLookups): string | null {
@@ -199,39 +253,17 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
     nameKo: localized(localization, `cobblemon.species.${row.SpeciesID}.name`, row.NameKO),
     descriptionKo: localized(localization, `cobblemon.species.${row.SpeciesID}.desc`, ''),
   }))
-  const forms = formRows.map((row) => ({
-    id: row.FormID,
-    speciesId: row.SpeciesID,
-    baseFormId: row.BaseFormID || null,
-    nameKo: row.FormKO,
-    primaryTypeId: row.Type1 || null,
-    secondaryTypeId: row.Type2 || null,
-  }))
+  const forms = formRows.map((row) => normalizeFormRow(row as FormSourceRow))
   const abilities = abilityRows.map((row) => ({
     id: row.AbilityID,
     nameKo: requiredLocalized(localization, `cobblemon.ability.${row.AbilityID}`),
     descriptionKo: requiredLocalized(localization, `cobblemon.ability.${row.AbilityID}.desc`),
   }))
-  const moves = moveRows.map((row) => ({
-    id: row.MoveID,
+  const moves = moveRows.map((row) => normalizeMoveRow(row as MoveSourceRow, {
     nameKo: requiredLocalized(localization, `cobblemon.move.${row.MoveID}`),
     descriptionKo: requiredLocalized(localization, `cobblemon.move.${row.MoveID}.desc`),
-    typeId: row.Type,
-    damageClass: normalizeDamageClass(row.Category),
-    power: nullableInteger(row.Power),
-    accuracy: nullableInteger(row.Accuracy),
-    pp: nullableInteger(row.PP),
   }))
-  const learnsets = learnsetRows.map((row) => ({
-    speciesId: row.SpeciesID,
-    formId: row.FormID || null,
-    moveId: row.MoveID,
-    learnMethod: normalizeLearnMethod(row.SourceType),
-    learnLevel: row.SourceType === 'level'
-      ? nullableInteger(row.SourceValue || row.MinLevel)
-      : null,
-    conditionKo: localizeLearnsetCondition(row.SourceType, row.SourceValue || row.MinLevel),
-  }))
+  const learnsets = learnsetRows.map((row) => normalizeLearnsetRow(row as LearnsetSourceRow))
   const items = itemRows.map((row) => ({
     id: row.ItemID,
     nameKo: localized(localization, `item.cobblemon.${row.ItemID}`, row.NameKO),
@@ -246,13 +278,7 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
       moves: moveNameLookup,
     }).text,
   }))
-  const formAbilities = formAbilityRows.map((row) => ({
-    formId: row.FormID,
-    speciesId: row.SpeciesID,
-    abilityId: row.AbilityID,
-    slot: row.Slot,
-    isHidden: row.Hidden.trim().toLowerCase() === 'true',
-  }))
+  const formAbilities = formAbilityRows.map((row) => normalizeFormAbilityRow(row as FormAbilitySourceRow))
   const natures = natureRows.map((row) => ({ id: row.NatureID, nameKo: row.NameKO }))
   const typeMatchups = matchupRows.map((row) => ({
     attackingTypeId: row.AttackType,

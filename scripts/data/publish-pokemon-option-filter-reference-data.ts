@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -25,9 +26,9 @@ function argument(name: string): string | undefined {
   return index >= 0 ? process.argv[index + 1] : undefined
 }
 
-function chunks<T>(rows: T[]): T[][] {
-  return Array.from({ length: Math.ceil(rows.length / batchSize) }, (_, index) => (
-    rows.slice(index * batchSize, (index + 1) * batchSize)
+function chunks<T>(rows: T[], size = batchSize): T[][] {
+  return Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => (
+    rows.slice(index * size, (index + 1) * size)
   ))
 }
 
@@ -77,13 +78,27 @@ async function insertBatches(
   }
 }
 
-async function deletePublicationRows(
-  client: SupabaseClient,
-  table: 'reference_form_abilities' | 'reference_move_learnsets',
-  publicationId: string,
+export async function stageThenReplacePublicationRows<T>(
+  rows: T[],
+  size: number,
+  stage: (batch: T[]) => Promise<void>,
+  replace: () => Promise<void>,
 ): Promise<void> {
-  const { error } = await client.from(table).delete().eq('publication_id', publicationId)
-  if (error) throw new Error(`${table} 기존 게시본 삭제 실패: ${error.message}`)
+  for (const batch of chunks(rows, size)) await stage(batch)
+  await replace()
+}
+
+export function assertOptionFilterPublicationCounts(
+  dataset: Pick<ReferenceDataset, 'moves' | 'formAbilities' | 'learnsets' | 'reportedCounts'>,
+): void {
+  const expected = { moves: 826, formAbilities: 3055, learnsets: 116519 } as const
+  for (const [key, count] of Object.entries(expected) as Array<[keyof typeof expected, number]>) {
+    const actual = dataset[key].length
+    const reported = dataset.reportedCounts[key]
+    if (actual !== count || reported !== count) {
+      throw new Error(`${key}:actual=${actual}:reported=${reported}:expected=${count}`)
+    }
+  }
 }
 
 export function assertKoreanOptionDisplayValues(
@@ -111,6 +126,7 @@ export async function publishPokemonOptionFilterReferenceData(
   dataset: ReferenceDataset,
   client: SupabaseClient,
 ): Promise<{ moves: number; formAbilities: number; learnsets: number }> {
+  assertOptionFilterPublicationCounts(dataset)
   assertKoreanOptionDisplayValues(dataset)
 
   const { data: publication, error: publicationError } = await client
@@ -200,11 +216,35 @@ export async function publishPokemonOptionFilterReferenceData(
     ...row,
     move_id: requireIdentifierId(moveIds, moveIdentifier, 'reference_moves'),
   }))
-
-  await deletePublicationRows(client, 'reference_form_abilities', publicationId)
-  await insertBatches(client, 'reference_form_abilities', formAbilities)
-  await deletePublicationRows(client, 'reference_move_learnsets', publicationId)
-  await insertBatches(client, 'reference_move_learnsets', learnsets)
+  const batchId = randomUUID()
+  const stagedRows = [
+    ...formAbilities.map((row, sourceOrder) => ({
+      batch_id: batchId,
+      publication_id: publicationId,
+      row_kind: 'form_ability',
+      source_order: sourceOrder,
+      payload: row,
+    })),
+    ...learnsets.map((row, sourceOrder) => ({
+      batch_id: batchId,
+      publication_id: publicationId,
+      row_kind: 'learnset',
+      source_order: sourceOrder,
+      payload: row,
+    })),
+  ]
+  await stageThenReplacePublicationRows(
+    stagedRows,
+    batchSize,
+    async (batch) => insertBatches(client, 'reference_option_filter_publication_staging', batch),
+    async () => {
+      const { error } = await client.rpc('replace_pokemon_option_filter_reference_data', {
+        p_publication_id: publicationId,
+        p_batch_id: batchId,
+      })
+      if (error) throw new Error(`포켓몬 선택 필터 교체 실패: ${error.message}`)
+    },
+  )
 
   return { moves: moves.length, formAbilities: formAbilities.length, learnsets: learnsets.length }
 }

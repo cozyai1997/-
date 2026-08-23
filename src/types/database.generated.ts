@@ -671,6 +671,41 @@ export type Database = {
           },
         ]
       }
+      reference_option_filter_publication_staging: {
+        Row: {
+          batch_id: string
+          id: string
+          payload: Json
+          publication_id: string
+          row_kind: string
+          source_order: number
+        }
+        Insert: {
+          batch_id: string
+          id?: string
+          payload: Json
+          publication_id: string
+          row_kind: string
+          source_order: number
+        }
+        Update: {
+          batch_id?: string
+          id?: string
+          payload?: Json
+          publication_id?: string
+          row_kind?: string
+          source_order?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reference_option_filter_publication_staging_publication_id_fkey"
+            columns: ["publication_id"]
+            isOneToOne: false
+            referencedRelation: "data_publications"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       reference_natures: {
         Row: {
           decreased_stat: string | null
@@ -888,6 +923,10 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      replace_pokemon_option_filter_reference_data: {
+        Args: { p_batch_id: string; p_publication_id: string }
+        Returns: undefined
       }
       stat_block_greater_than_or_equal: {
         Args: { left_block: Json; right_block: Json }

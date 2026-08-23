@@ -1,38 +1,46 @@
 import { describe, expect, it } from 'vitest'
 
-import { importReferenceData } from '../../scripts/data/import-reference-data'
-
-const sourceRoot = 'C:/Users/PARKSUNGSIK/OneDrive/문서/Desktop/Cobbleverse_Pokemon_Manager_Package_v1.3_TABLE_FIX'
+import {
+  normalizeFormAbilityRow,
+  normalizeFormRow,
+  normalizeLearnsetRow,
+  normalizeMoveRow,
+} from '../../scripts/data/import-reference-data'
 
 describe('포켓몬 선택 필터 기준 데이터', () => {
   it('원본 폼, 기술, 습득과 특성 관계의 필터 필드를 그대로 보존한다', () => {
-    const dataset = importReferenceData(sourceRoot)
-
-    expect(dataset.reportedCounts).toMatchObject({
-      moves: 826,
-      learnsets: 116519,
-      formAbilities: 3055,
-    })
-    expect(dataset.forms.find((row) => row.id === 'venusaur-gmax')).toMatchObject({
+    expect(normalizeFormRow({
+      FormID: 'venusaur-gmax', SpeciesID: 'venusaur', BaseFormID: 'venusaur-normal',
+      FormKO: 'Gmax', Type1: 'grass', Type2: 'poison',
+    })).toMatchObject({
+      id: 'venusaur-gmax',
       baseFormId: 'venusaur-normal',
     })
-    expect(dataset.moves.find((row) => row.id === 'visegrip')).toMatchObject({
+    expect(normalizeMoveRow({
+      MoveID: 'visegrip', NameKO: '찝기', Type: 'normal', Category: 'physical',
+      Power: '55', Accuracy: '100', PP: '',
+    }, { nameKo: '찝기', descriptionKo: '상대를 양쪽에서 집어서 데미지를 준다.' })).toMatchObject({
+      id: 'visegrip',
       damageClass: 'physical',
       power: 55,
       accuracy: 100,
       pp: null,
     })
-    expect(dataset.learnsets.find((row) => row.speciesId === 'bulbasaur' && row.moveId === 'growl')).toMatchObject({
+    expect(normalizeLearnsetRow({
+      SpeciesID: 'bulbasaur', FormID: '', MoveID: 'growl', SourceType: 'level', SourceValue: '1', MinLevel: '1',
+    })).toMatchObject({
+      speciesId: 'bulbasaur',
       formId: null,
       learnMethod: 'level',
       learnLevel: 1,
     })
-    expect(new Set(dataset.learnsets.map((row) => row.learnMethod))).toEqual(new Set([
-      'level', 'tm', 'tutor', 'egg', 'legacy', 'special', 'form_change',
-    ]))
-    expect(dataset.formAbilities.filter((row) => row.formId === 'beedrill-mega')).toEqual([
-      expect.objectContaining({ abilityId: 'adaptability', slot: 'first', isHidden: false }),
-      expect.objectContaining({ abilityId: 'adaptability', slot: 'hidden', isHidden: true }),
-    ])
+    expect(normalizeLearnsetRow({
+      SpeciesID: 'vaporeon', FormID: '', MoveID: 'bubble', SourceType: 'level', SourceValue: '0', MinLevel: '0',
+    })).toMatchObject({ learnMethod: 'level', learnLevel: 0 })
+    expect(normalizeFormAbilityRow({
+      FormID: 'beedrill-mega', SpeciesID: 'beedrill', AbilityID: 'adaptability', Slot: 'hidden', Hidden: 'True',
+    })).toEqual({
+      formId: 'beedrill-mega', speciesId: 'beedrill', abilityId: 'adaptability', slot: 'hidden', isHidden: true,
+    })
   })
 })
