@@ -12,6 +12,7 @@ import {
 import {
   createRegistrationDraft,
   readRegistrationDraft,
+  reconcileSpeciesSelection,
   registrationDraftKey,
   type RegistrationDraft,
 } from '@/features/owned-pokemon/registration-state'
@@ -83,7 +84,7 @@ export function PokemonRegistrationWizard() {
   function chooseSpecies(speciesId: string) {
     const option = options.species.find((item) => item.id === speciesId)
     const form = option?.forms.find((item) => item.isDefault) ?? option?.forms[0]
-    update({ speciesId, formId: form?.id ?? '' })
+    setDraft((current) => reconcileSpeciesSelection(current, speciesId, form?.id ?? ''))
   }
 
   function next() {
@@ -108,7 +109,7 @@ export function PokemonRegistrationWizard() {
       return
     }
     try {
-      await createOwnedPokemon(client, data.user.id, draft)
+      await createOwnedPokemon(client, draft)
       sessionStorage.removeItem(registrationDraftKey)
       router.replace('/my-pokemon')
       router.refresh()

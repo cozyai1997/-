@@ -671,41 +671,6 @@ export type Database = {
           },
         ]
       }
-      reference_option_filter_publication_staging: {
-        Row: {
-          batch_id: string
-          id: string
-          payload: Json
-          publication_id: string
-          row_kind: string
-          source_order: number
-        }
-        Insert: {
-          batch_id: string
-          id?: string
-          payload: Json
-          publication_id: string
-          row_kind: string
-          source_order: number
-        }
-        Update: {
-          batch_id?: string
-          id?: string
-          payload?: Json
-          publication_id?: string
-          row_kind?: string
-          source_order?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "reference_option_filter_publication_staging_publication_id_fkey"
-            columns: ["publication_id"]
-            isOneToOne: false
-            referencedRelation: "data_publications"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       reference_natures: {
         Row: {
           decreased_stat: string | null
@@ -737,6 +702,41 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "reference_natures_publication_id_fkey"
+            columns: ["publication_id"]
+            isOneToOne: false
+            referencedRelation: "data_publications"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      reference_option_filter_publication_staging: {
+        Row: {
+          batch_id: string
+          id: string
+          payload: Json
+          publication_id: string
+          row_kind: string
+          source_order: number
+        }
+        Insert: {
+          batch_id: string
+          id?: string
+          payload: Json
+          publication_id: string
+          row_kind: string
+          source_order: number
+        }
+        Update: {
+          batch_id?: string
+          id?: string
+          payload?: Json
+          publication_id?: string
+          row_kind?: string
+          source_order?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reference_option_filter_publication_staging_publication_id_fkey"
             columns: ["publication_id"]
             isOneToOne: false
             referencedRelation: "data_publications"
@@ -923,6 +923,27 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      create_owned_pokemon_with_moves: {
+        Args: {
+          p_ability_id: string
+          p_captured_on: string
+          p_current_moves: Json
+          p_effective_iv: Json
+          p_effective_nature_id: string
+          p_ev: Json
+          p_form_id: string
+          p_gender: Database["public"]["Enums"]["pokemon_gender"]
+          p_held_item_id: string
+          p_level: number
+          p_nickname: string
+          p_notes: string
+          p_original_iv: Json
+          p_original_nature_id: string
+          p_species_id: string
+          p_target_moves: Json
+        }
+        Returns: string
       }
       replace_pokemon_option_filter_reference_data: {
         Args: { p_batch_id: string; p_publication_id: string }

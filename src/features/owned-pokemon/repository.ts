@@ -22,6 +22,252 @@ export type OwnedPokemonCard = {
 
 export type LookupOption = { id: string; nameKo: string }
 
+export type AbilityOption = {
+  id: string
+  nameKo: string
+  descriptionKo: string
+  isHidden: boolean
+}
+
+export type MoveAcquisitionRoute = {
+  methodKo: string
+  conditionKo: string
+}
+
+export type MoveOption = {
+  id: string
+  nameKo: string
+  descriptionKo: string
+  typeKo: string
+  damageClassKo: string
+  power: number | null
+  accuracy: number | null
+  pp: number | null
+  routes: MoveAcquisitionRoute[]
+}
+
+export type PokemonFilteredOptions = {
+  abilities: AbilityOption[]
+  moves: MoveOption[]
+}
+
+type AbilityRelationRow = {
+  form_id: string
+  is_hidden: boolean
+  reference_abilities: {
+    id: string
+    name_ko: string
+    description_ko: string
+    is_active: boolean
+  }
+}
+
+type MoveLearnsetRelationRow = {
+  learn_method: string
+  condition_ko: string
+  reference_moves: {
+    id: string
+    name_ko: string
+    description_ko: string
+    damage_class: string
+    power: number | null
+    accuracy: number | null
+    pp: number | null
+    is_active: boolean
+    reference_types: { name_ko: string }
+  }
+}
+
+const learnMethodIdentifiers = [
+  'level',
+  'tm',
+  'tutor',
+  'egg',
+  'special',
+  'form_change',
+  'legacy',
+] as const
+
+const learnMethodLabelsKo: Record<(typeof learnMethodIdentifiers)[number], string> = {
+  level: '레벨업',
+  tm: '기술머신',
+  tutor: '기술 가르침',
+  egg: '유전',
+  special: '특별한 방법',
+  form_change: '모습 변경',
+  legacy: '과거 버전',
+}
+
+const damageClassLabelsKo: Record<string, string> = {
+  physical: '물리',
+  special: '특수',
+  status: '변화',
+}
+
+const koreanCollator = new Intl.Collator('ko')
+
+export function learnMethodLabelKo(identifier: string): string {
+  if (!learnMethodIdentifiers.includes(identifier as (typeof learnMethodIdentifiers)[number])) {
+    throw new Error('지원하지 않는 기술 습득 경로입니다.')
+  }
+  return learnMethodLabelsKo[identifier as (typeof learnMethodIdentifiers)[number]]
+}
+
+export function damageClassLabelKo(identifier: string): string {
+  const label = damageClassLabelsKo[identifier]
+  if (!label) throw new Error('지원하지 않는 기술 분류입니다.')
+  return label
+}
+
+export function groupAbilityOptions(
+  rows: ReadonlyArray<AbilityRelationRow>,
+  exactFormId: string,
+  baseFormId: string | null,
+): AbilityOption[] {
+  const exactRows = rows.filter((row) => row.form_id === exactFormId)
+  const selectedRows = exactRows.length > 0
+    ? exactRows
+    : rows.filter((row) => baseFormId !== null && row.form_id === baseFormId)
+  const abilities = new Map<string, AbilityOption>()
+
+  for (const row of selectedRows) {
+    if (!row.reference_abilities.is_active) continue
+    const existing = abilities.get(row.reference_abilities.id)
+    abilities.set(row.reference_abilities.id, {
+      id: row.reference_abilities.id,
+      nameKo: row.reference_abilities.name_ko,
+      descriptionKo: row.reference_abilities.description_ko,
+      isHidden: (existing?.isHidden ?? false) || row.is_hidden,
+    })
+  }
+
+  return [...abilities.values()].sort(compareKoreanNameAndId)
+}
+
+export function groupMoveOptions(rows: ReadonlyArray<MoveLearnsetRelationRow>): MoveOption[] {
+  type GroupedMove = Omit<MoveOption, 'routes'> & {
+    rawRoutes: Array<{ method: string; conditionKo: string }>
+    routeKeys: Set<string>
+  }
+  const moves = new Map<string, GroupedMove>()
+
+  for (const row of rows) {
+    const move = row.reference_moves
+    if (!move.is_active) continue
+    const conditionKo = row.condition_ko.trim()
+    if (!conditionKo) throw new Error('기술 습득 조건은 한국어로 비어 있지 않게 등록해야 합니다.')
+    learnMethodLabelKo(row.learn_method)
+    let grouped = moves.get(move.id)
+    if (!grouped) {
+      grouped = {
+        id: move.id,
+        nameKo: move.name_ko,
+        descriptionKo: move.description_ko,
+        typeKo: move.reference_types.name_ko,
+        damageClassKo: damageClassLabelKo(move.damage_class),
+        power: move.power,
+        accuracy: move.accuracy,
+        pp: move.pp,
+        rawRoutes: [],
+        routeKeys: new Set(),
+      }
+      moves.set(move.id, grouped)
+    }
+    const routeKey = `${row.learn_method}\u0000${conditionKo}`
+    if (!grouped.routeKeys.has(routeKey)) {
+      grouped.routeKeys.add(routeKey)
+      grouped.rawRoutes.push({ method: row.learn_method, conditionKo })
+    }
+  }
+
+  return [...moves.values()]
+    .map((move) => ({
+      id: move.id,
+      nameKo: move.nameKo,
+      descriptionKo: move.descriptionKo,
+      typeKo: move.typeKo,
+      damageClassKo: move.damageClassKo,
+      power: move.power,
+      accuracy: move.accuracy,
+      pp: move.pp,
+      routes: move.rawRoutes
+        .sort((left, right) => {
+          const order = learnMethodOrder(left.method) - learnMethodOrder(right.method)
+          return order || koreanCollator.compare(left.conditionKo, right.conditionKo)
+        })
+        .map((route) => ({
+          methodKo: learnMethodLabelKo(route.method),
+          conditionKo: route.conditionKo,
+        })),
+    }))
+    .sort(compareKoreanNameAndId)
+}
+
+export async function listPokemonFilteredOptions(
+  client: SupabaseClient<Database>,
+  speciesId: string,
+  formId: string,
+): Promise<PokemonFilteredOptions> {
+  const formRequest = client
+    .from('reference_forms')
+    .select('id, species_id, base_form_id')
+    .eq('id', formId)
+    .eq('species_id', speciesId)
+    .maybeSingle()
+  const learnsetRequest = client
+    .from('reference_move_learnsets')
+    .select(`
+      learn_method,
+      condition_ko,
+      reference_moves!inner(
+        id, name_ko, description_ko, damage_class, power, accuracy, pp, is_active,
+        reference_types!inner(name_ko)
+      )
+    `)
+    .eq('species_id', speciesId)
+
+  const formResult = await formRequest
+  if (formResult.error) throw formResult.error
+  if (!formResult.data) throw new Error('선택한 종에 해당하는 모습을 찾지 못했습니다.')
+
+  const formIds = formResult.data.base_form_id
+    ? [formId, formResult.data.base_form_id]
+    : [formId]
+  const abilityRequest = client
+    .from('reference_form_abilities')
+    .select(`
+      form_id,
+      is_hidden,
+      reference_abilities!inner(id, name_ko, description_ko, is_active)
+    `)
+    .in('form_id', formIds)
+  const [abilityResult, learnsetResult] = await Promise.all([abilityRequest, learnsetRequest])
+  if (abilityResult.error) throw abilityResult.error
+  if (learnsetResult.error) throw learnsetResult.error
+
+  return {
+    abilities: groupAbilityOptions(
+      abilityResult.data as unknown as AbilityRelationRow[],
+      formId,
+      formResult.data.base_form_id,
+    ),
+    moves: groupMoveOptions(learnsetResult.data as unknown as MoveLearnsetRelationRow[]),
+  }
+}
+
+function learnMethodOrder(identifier: string): number {
+  const order = learnMethodIdentifiers.indexOf(identifier as (typeof learnMethodIdentifiers)[number])
+  if (order === -1) throw new Error('지원하지 않는 기술 습득 경로입니다.')
+  return order
+}
+
+function compareKoreanNameAndId(
+  left: { nameKo: string; id: string },
+  right: { nameKo: string; id: string },
+) {
+  return koreanCollator.compare(left.nameKo, right.nameKo) || left.id.localeCompare(right.id)
+}
+
 export type OwnedPokemonDetail = OwnedPokemonInput & {
   id: string
   nameKo: string
@@ -67,27 +313,31 @@ export async function listSpeciesOptions(client: SupabaseClient<Database>) {
 
 export async function createOwnedPokemon(
   client: SupabaseClient<Database>,
-  userId: string,
   input: OwnedPokemonInput,
 ) {
-  const { error } = await client.from('owned_pokemon').insert({
-    user_id: userId,
-    species_id: input.speciesId,
-    form_id: input.formId,
-    nickname: input.nickname,
-    gender: input.gender,
-    level: input.level,
-    captured_on: input.capturedOn,
-    original_nature_id: input.originalNatureId,
-    effective_nature_id: input.effectiveNatureId,
-    ability_id: input.abilityId,
-    original_iv: input.originalIv,
-    effective_iv: input.effectiveIv,
-    ev: input.ev,
-    held_item_id: input.heldItemId,
-    notes: input.notes,
+  const { data, error } = await client.rpc('create_owned_pokemon_with_moves', {
+    p_species_id: input.speciesId,
+    p_form_id: input.formId,
+    p_nickname: input.nickname as unknown as string,
+    p_gender: input.gender,
+    p_level: input.level,
+    p_captured_on: input.capturedOn as unknown as string,
+    p_original_nature_id: input.originalNatureId as unknown as string,
+    p_effective_nature_id: input.effectiveNatureId as unknown as string,
+    p_ability_id: input.abilityId as unknown as string,
+    p_original_iv: input.originalIv,
+    p_effective_iv: input.effectiveIv,
+    p_ev: input.ev,
+    p_held_item_id: input.heldItemId as unknown as string,
+    p_notes: input.notes,
+    p_current_moves: input.currentMoves.map((move) => ({ move_id: move.moveId })),
+    p_target_moves: input.targetMoves.map((move) => ({
+      move_id: move.moveId,
+      condition_ko: move.conditionKo,
+    })),
   })
   if (error) throw error
+  return data
 }
 
 export async function listOwnedPokemon(client: SupabaseClient<Database>) {
@@ -139,18 +389,26 @@ export async function getOwnedPokemonDetail(
   )[entry - 1]
   if (!pokemon) return null
 
-  const { data: rules, error: rulesError } = await client
-    .from('reference_evolution_rules')
-    .select(`
-      condition_ko,
-      target_form:reference_forms!reference_evolution_rules_to_form_id_fkey(
-        name_ko,
-        reference_species(name_ko, national_dex_number)
-      )
-    `)
-    .eq('from_form_id', pokemon.form_id)
-    .order('sort_order')
-  if (rulesError) throw rulesError
+  const [rulesResult, movesResult] = await Promise.all([
+    client
+      .from('reference_evolution_rules')
+      .select(`
+        condition_ko,
+        target_form:reference_forms!reference_evolution_rules_to_form_id_fkey(
+          name_ko,
+          reference_species(name_ko, national_dex_number)
+        )
+      `)
+      .eq('from_form_id', pokemon.form_id)
+      .order('sort_order'),
+    client
+      .from('owned_pokemon_moves')
+      .select('move_id, kind, slot, target_condition_ko')
+      .eq('owned_pokemon_id', pokemon.id)
+      .order('slot'),
+  ])
+  if (rulesResult.error) throw rulesResult.error
+  if (movesResult.error) throw movesResult.error
 
   return {
     id: pokemon.id,
@@ -168,6 +426,15 @@ export async function getOwnedPokemonDetail(
     ev: parseStatBlock(pokemon.ev),
     heldItemId: pokemon.held_item_id,
     notes: pokemon.notes,
+    currentMoves: movesResult.data
+      .filter((move) => move.kind === 'current')
+      .map((move) => ({ moveId: move.move_id })),
+    targetMoves: movesResult.data
+      .filter((move) => move.kind === 'target')
+      .map((move) => ({
+        moveId: move.move_id,
+        conditionKo: move.target_condition_ko,
+      })),
     nameKo: pokemon.reference_species.name_ko,
     formNameKo: pokemon.reference_forms.name_ko,
     nationalDexNumber: pokemon.reference_species.national_dex_number,
@@ -175,7 +442,7 @@ export async function getOwnedPokemonDetail(
     effectiveNatureNameKo: pokemon.effective_nature?.name_ko ?? null,
     abilityNameKo: pokemon.ability?.name_ko ?? null,
     heldItemNameKo: pokemon.held_item?.name_ko ?? null,
-    evolutionRules: rules.map((rule) => ({
+    evolutionRules: rulesResult.data.map((rule) => ({
       conditionKo: rule.condition_ko,
       targetNameKo: rule.target_form.reference_species.name_ko,
       targetDexNumber: rule.target_form.reference_species.national_dex_number,

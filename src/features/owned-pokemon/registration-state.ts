@@ -1,6 +1,7 @@
-import { emptyStatBlock, type OwnedPokemonInput } from './schema'
+import { emptyStatBlock, statKeys, type OwnedPokemonInput, type StatBlock } from './schema'
 
-export const registrationDraftKey = 'pokemon-registration-draft-v1'
+export const registrationDraftKey = 'pokemon-registration-draft-v2'
+const legacyRegistrationDraftKey = 'pokemon-registration-draft-v1'
 
 export type RegistrationDraft = OwnedPokemonInput & { step: number }
 
@@ -21,16 +22,143 @@ export function createRegistrationDraft(): RegistrationDraft {
     ev: emptyStatBlock(),
     heldItemId: null,
     notes: '',
+    currentMoves: [],
+    targetMoves: [],
   }
 }
 
 export function readRegistrationDraft(storage: Pick<Storage, 'getItem'>) {
-  const saved = storage.getItem(registrationDraftKey)
-  if (!saved) return createRegistrationDraft()
-  try {
-    const parsed = JSON.parse(saved) as Partial<RegistrationDraft>
-    return { ...createRegistrationDraft(), ...parsed }
-  } catch {
-    return createRegistrationDraft()
+  for (const key of [registrationDraftKey, legacyRegistrationDraftKey]) {
+    const saved = storage.getItem(key)
+    if (!saved) continue
+    try {
+      const parsed: unknown = JSON.parse(saved)
+      if (!isRecord(parsed)) continue
+      const defaults = createRegistrationDraft()
+      return {
+        step: isIntegerBetween(parsed.step, 1, 7) ? parsed.step : defaults.step,
+        speciesId: stringOrDefault(parsed.speciesId, defaults.speciesId),
+        formId: stringOrDefault(parsed.formId, defaults.formId),
+        nickname: nullableStringOrDefault(parsed.nickname, defaults.nickname),
+        gender: parsed.gender === 'male' || parsed.gender === 'female' || parsed.gender === 'genderless'
+          ? parsed.gender
+          : defaults.gender,
+        level: typeof parsed.level === 'number' && Number.isFinite(parsed.level)
+          ? parsed.level
+          : defaults.level,
+        capturedOn: nullableStringOrDefault(parsed.capturedOn, defaults.capturedOn),
+        originalNatureId: nullableStringOrDefault(
+          parsed.originalNatureId,
+          defaults.originalNatureId,
+        ),
+        effectiveNatureId: nullableStringOrDefault(
+          parsed.effectiveNatureId,
+          defaults.effectiveNatureId,
+        ),
+        abilityId: nullableStringOrDefault(parsed.abilityId, defaults.abilityId),
+        originalIv: normalizeStatBlock(parsed.originalIv, defaults.originalIv),
+        effectiveIv: normalizeStatBlock(parsed.effectiveIv, defaults.effectiveIv),
+        ev: normalizeStatBlock(parsed.ev, defaults.ev),
+        heldItemId: nullableStringOrDefault(parsed.heldItemId, defaults.heldItemId),
+        notes: stringOrDefault(parsed.notes, defaults.notes),
+        currentMoves: normalizeCurrentMoves(parsed.currentMoves),
+        targetMoves: normalizeTargetMoves(parsed.targetMoves),
+      }
+    } catch {
+      continue
+    }
   }
+  return createRegistrationDraft()
+}
+
+export function reconcileSpeciesSelection(
+  draft: RegistrationDraft,
+  speciesId: string,
+  formId: string,
+): RegistrationDraft {
+  return {
+    ...draft,
+    speciesId,
+    formId,
+    abilityId: null,
+    currentMoves: [],
+    targetMoves: [],
+  }
+}
+
+export function reconcileFormSelection(
+  draft: RegistrationDraft,
+  formId: string,
+  allowedAbilityIds: ReadonlySet<string>,
+): RegistrationDraft {
+  return {
+    ...draft,
+    formId,
+    abilityId: draft.abilityId && allowedAbilityIds.has(draft.abilityId)
+      ? draft.abilityId
+      : null,
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isIntegerBetween(value: unknown, minimum: number, maximum: number): value is number {
+  return Number.isInteger(value) && Number(value) >= minimum && Number(value) <= maximum
+}
+
+function stringOrDefault(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback
+}
+
+function nullableStringOrDefault(
+  value: unknown,
+  fallback: string | null,
+): string | null {
+  return value === null || typeof value === 'string' ? value : fallback
+}
+
+function normalizeStatBlock(value: unknown, fallback: StatBlock): StatBlock {
+  if (!isRecord(value)) return fallback
+  return Object.fromEntries(statKeys.map((key) => [
+    key,
+    typeof value[key] === 'number' && Number.isFinite(value[key]) ? value[key] : fallback[key],
+  ])) as StatBlock
+}
+
+function normalizeCurrentMoves(value: unknown): RegistrationDraft['currentMoves'] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const moves: RegistrationDraft['currentMoves'] = []
+  for (const candidate of value) {
+    if (!isRecord(candidate) || typeof candidate.moveId !== 'string' || !candidate.moveId.trim()) continue
+    const moveId = candidate.moveId.trim()
+    if (seen.has(moveId)) continue
+    seen.add(moveId)
+    moves.push({ moveId })
+    if (moves.length === 4) break
+  }
+  return moves
+}
+
+function normalizeTargetMoves(value: unknown): RegistrationDraft['targetMoves'] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const moves: RegistrationDraft['targetMoves'] = []
+  for (const candidate of value) {
+    if (
+      !isRecord(candidate)
+      || typeof candidate.moveId !== 'string'
+      || !candidate.moveId.trim()
+      || typeof candidate.conditionKo !== 'string'
+      || !candidate.conditionKo.trim()
+    ) continue
+    const moveId = candidate.moveId.trim()
+    if (seen.has(moveId)) continue
+    seen.add(moveId)
+    moves.push({ moveId, conditionKo: candidate.conditionKo })
+    if (moves.length === 4) break
+  }
+  return moves
 }
