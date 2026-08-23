@@ -18,12 +18,14 @@ const {
   listOwnedPokemonEditOptions,
   listPokemonFilteredOptions,
   createOwnedPokemon,
+  refreshSession,
 } = vi.hoisted(() => ({
   replace: vi.fn(),
   refresh: vi.fn(),
   listOwnedPokemonEditOptions: vi.fn(),
   listPokemonFilteredOptions: vi.fn(),
   createOwnedPokemon: vi.fn(),
+  refreshSession: vi.fn(),
 }))
 
 vi.mock('next/navigation', () => ({
@@ -31,7 +33,7 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('@/lib/supabase/client', () => ({
-  createClient: () => ({ auth: { getUser: vi.fn() } }),
+  createClient: () => ({ auth: { getUser: vi.fn(), refreshSession } }),
 }))
 
 vi.mock('@/features/owned-pokemon/repository', async (importOriginal) => {
@@ -139,6 +141,7 @@ const electricOptions: PokemonFilteredOptions = {
 describe('포켓몬 등록 필터 선택 UI', () => {
   beforeEach(() => {
     sessionStorage.clear()
+    refreshSession.mockResolvedValue({ error: null })
     listOwnedPokemonEditOptions.mockResolvedValue(editOptions)
     listPokemonFilteredOptions.mockImplementation(
       async (_client: unknown, _speciesId: string, formId: string) => {
@@ -150,7 +153,42 @@ describe('포켓몬 등록 필터 선택 UI', () => {
   })
 
   afterEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
+  })
+
+  it('로그인 직후 기준데이터 인증 오류를 세션 갱신 뒤 자동 재시도한다', async () => {
+    listOwnedPokemonEditOptions
+      .mockRejectedValueOnce(new Error('일시적인 401'))
+      .mockResolvedValueOnce(editOptions)
+
+    render(<PokemonRegistrationWizard />)
+
+    expect(await screen.findByRole('option', { name: '샤미드 · 도감번호 #0134' }))
+      .toBeInTheDocument()
+    expect(screen.getByLabelText('포켓몬 종')).toBeEnabled()
+    expect(listOwnedPokemonEditOptions).toHaveBeenCalledTimes(2)
+    expect(refreshSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('자동 재시도가 모두 실패하면 진행을 막고 수동 다시 불러오기를 제공한다', async () => {
+    const user = userEvent.setup()
+    listOwnedPokemonEditOptions
+      .mockRejectedValueOnce(new Error('첫 실패'))
+      .mockRejectedValueOnce(new Error('두 번째 실패'))
+      .mockRejectedValueOnce(new Error('세 번째 실패'))
+      .mockResolvedValueOnce(editOptions)
+
+    render(<PokemonRegistrationWizard />)
+
+    const retry = await screen.findByRole('button', { name: '기준데이터 다시 불러오기' })
+    expect(screen.getByLabelText('포켓몬 종')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '다음' })).toBeDisabled()
+    await user.click(retry)
+
+    expect(await screen.findByRole('option', { name: '샤미드 · 도감번호 #0134' }))
+      .toBeInTheDocument()
+    expect(screen.getByLabelText('포켓몬 종')).toBeEnabled()
+    expect(listOwnedPokemonEditOptions).toHaveBeenCalledTimes(4)
   })
 
   it('정확한 폼의 한국어 특성과 네 칸씩의 현재·목표 기술만 선택하게 한다', async () => {

@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { createClient } from '@/lib/supabase/client'
+import { retrySupabaseRead } from '@/lib/supabase/retry'
 import {
   createOwnedPokemon,
   listOwnedPokemonEditOptions,
@@ -43,6 +44,7 @@ const emptyFilteredOptions: PokemonFilteredOptions = { abilities: [], moves: [] 
 const moveSlots = [0, 1, 2, 3] as const
 
 type FilterStatus = 'idle' | 'loading' | 'loaded' | 'error'
+type ReferenceStatus = 'loading' | 'loaded' | 'error'
 
 type MoveSlotProps = {
   kind: 'current' | 'target'
@@ -164,6 +166,7 @@ export function PokemonRegistrationWizard() {
     emptyFilteredOptions,
   )
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('idle')
+  const [referenceStatus, setReferenceStatus] = useState<ReferenceStatus>('loading')
   const [ready, setReady] = useState(false)
   const [message, setMessage] = useState('')
   const requestVersion = useRef(0)
@@ -193,8 +196,10 @@ export function PokemonRegistrationWizard() {
     setFilteredOptions(emptyFilteredOptions)
     setFilterStatus('loading')
     try {
-      const loadedOptions = await listPokemonFilteredOptions(
-        createClient(), speciesId, formId,
+      const client = createClient()
+      const loadedOptions = await retrySupabaseRead(
+        client,
+        () => listPokemonFilteredOptions(client, speciesId, formId),
       )
       if (!mounted.current || requestVersion.current !== version) return
       setDraft((current) => current.speciesId === speciesId && current.formId === formId
@@ -209,6 +214,28 @@ export function PokemonRegistrationWizard() {
     }
   }, [])
 
+  const loadEditOptions = useCallback(async () => {
+    setReady(false)
+    setReferenceStatus('loading')
+    setMessage('')
+    const client = createClient()
+    try {
+      const loadedOptions = await retrySupabaseRead(
+        client,
+        () => listOwnedPokemonEditOptions(client),
+      )
+      if (!mounted.current) return
+      setOptions(loadedOptions)
+      setReferenceStatus('loaded')
+      setReady(true)
+    } catch {
+      if (!mounted.current) return
+      setOptions(emptyEditOptions)
+      setReferenceStatus('error')
+      setMessage('포켓몬 기준데이터를 불러오지 못했습니다.')
+    }
+  }, [])
+
   useEffect(() => {
     let active = true
     mounted.current = true
@@ -217,23 +244,14 @@ export function PokemonRegistrationWizard() {
       if (!active) return
       setDraft(restoredDraft)
       void loadFilteredOptions(restoredDraft.speciesId, restoredDraft.formId)
+      void loadEditOptions()
     })
-    listOwnedPokemonEditOptions(createClient())
-      .then((loadedOptions) => {
-        if (active) setOptions(loadedOptions)
-      })
-      .catch(() => {
-        if (active) setMessage('포켓몬 기준데이터를 불러오지 못했습니다.')
-      })
-      .finally(() => {
-        if (active) setReady(true)
-      })
     return () => {
       active = false
       mounted.current = false
       requestVersion.current += 1
     }
-  }, [loadFilteredOptions])
+  }, [loadEditOptions, loadFilteredOptions])
 
   useEffect(() => {
     if (ready) sessionStorage.setItem(registrationDraftKey, serializedDraft)
@@ -337,6 +355,20 @@ export function PokemonRegistrationWizard() {
       {filterStatusMessage ? (
         <p className={filterStatus === 'error' ? 'form-error' : 'filter-status'} role="status" aria-live="polite">
           {filterStatusMessage}
+        </p>
+      ) : null}
+      {filterStatus === 'error' && draft.speciesId && draft.formId ? (
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => void loadFilteredOptions(draft.speciesId, draft.formId)}
+        >
+          특성·기술 다시 불러오기
+        </button>
+      ) : null}
+      {referenceStatus === 'loading' ? (
+        <p className="filter-status" role="status" aria-live="polite">
+          포켓몬 기준데이터를 불러오는 중입니다.
         </p>
       ) : null}
 
@@ -486,11 +518,16 @@ export function PokemonRegistrationWizard() {
       </div>
 
       {message ? <p className="form-error" role="alert">{message}</p> : null}
+      {referenceStatus === 'error' ? (
+        <button type="button" className="text-button" onClick={() => void loadEditOptions()}>
+          기준데이터 다시 불러오기
+        </button>
+      ) : null}
       <div className="wizard-actions">
         {draft.step > 1 ? <button type="button" className="text-button" onClick={() => update({ step: draft.step - 1 })}>이전</button> : null}
         {draft.step < 7
-          ? <button type="button" className="primary-button" onClick={next} disabled={filterBlocked}>다음</button>
-          : <button type="button" className="primary-button" onClick={submit} disabled={filterBlocked}>등록 완료</button>}
+          ? <button type="button" className="primary-button" onClick={next} disabled={!ready || filterBlocked}>다음</button>
+          : <button type="button" className="primary-button" onClick={submit} disabled={!ready || filterBlocked}>등록 완료</button>}
       </div>
     </section>
   )
