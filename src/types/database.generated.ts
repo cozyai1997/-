@@ -390,8 +390,58 @@ export type Database = {
           },
         ]
       }
+      reference_form_abilities: {
+        Row: {
+          ability_id: string
+          form_id: string
+          id: string
+          is_hidden: boolean
+          publication_id: string
+          slot: string
+        }
+        Insert: {
+          ability_id: string
+          form_id: string
+          id?: string
+          is_hidden?: boolean
+          publication_id: string
+          slot: string
+        }
+        Update: {
+          ability_id?: string
+          form_id?: string
+          id?: string
+          is_hidden?: boolean
+          publication_id?: string
+          slot?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reference_form_abilities_ability_id_fkey"
+            columns: ["ability_id"]
+            isOneToOne: false
+            referencedRelation: "reference_abilities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reference_form_abilities_form_id_fkey"
+            columns: ["form_id"]
+            isOneToOne: false
+            referencedRelation: "reference_forms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reference_form_abilities_publication_id_fkey"
+            columns: ["publication_id"]
+            isOneToOne: false
+            referencedRelation: "data_publications"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       reference_forms: {
         Row: {
+          base_form_id: string | null
           id: string
           identifier: string
           is_active: boolean
@@ -403,6 +453,7 @@ export type Database = {
           species_id: string
         }
         Insert: {
+          base_form_id?: string | null
           id?: string
           identifier: string
           is_active?: boolean
@@ -414,6 +465,7 @@ export type Database = {
           species_id: string
         }
         Update: {
+          base_form_id?: string | null
           id?: string
           identifier?: string
           is_active?: boolean
@@ -425,6 +477,13 @@ export type Database = {
           species_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "reference_forms_base_form_id_fkey"
+            columns: ["base_form_id"]
+            isOneToOne: false
+            referencedRelation: "reference_forms"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "reference_forms_primary_type_id_fkey"
             columns: ["primary_type_id"]
@@ -493,30 +552,33 @@ export type Database = {
       reference_move_learnsets: {
         Row: {
           condition_ko: string
-          form_id: string
+          form_id: string | null
           id: string
           learn_level: number | null
           learn_method: string
           move_id: string
           publication_id: string | null
+          species_id: string
         }
         Insert: {
           condition_ko?: string
-          form_id: string
+          form_id?: string | null
           id?: string
           learn_level?: number | null
           learn_method: string
           move_id: string
           publication_id?: string | null
+          species_id: string
         }
         Update: {
           condition_ko?: string
-          form_id?: string
+          form_id?: string | null
           id?: string
           learn_level?: number | null
           learn_method?: string
           move_id?: string
           publication_id?: string | null
+          species_id?: string
         }
         Relationships: [
           {
@@ -540,6 +602,13 @@ export type Database = {
             referencedRelation: "data_publications"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "reference_move_learnsets_species_id_fkey"
+            columns: ["species_id"]
+            isOneToOne: false
+            referencedRelation: "reference_species"
+            referencedColumns: ["id"]
+          },
         ]
       }
       reference_moves: {
@@ -552,7 +621,7 @@ export type Database = {
           is_active: boolean
           name_ko: string
           power: number | null
-          pp: number
+          pp: number | null
           priority: number
           publication_id: string | null
           type_id: string
@@ -566,7 +635,7 @@ export type Database = {
           is_active?: boolean
           name_ko: string
           power?: number | null
-          pp: number
+          pp?: number | null
           priority?: number
           publication_id?: string | null
           type_id: string
@@ -580,7 +649,7 @@ export type Database = {
           is_active?: boolean
           name_ko?: string
           power?: number | null
-          pp?: number
+          pp?: number | null
           priority?: number
           publication_id?: string | null
           type_id?: string

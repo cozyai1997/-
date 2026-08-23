@@ -44,6 +44,37 @@ function localized(localization: Localization, key: string, fallback: string): s
   return typeof value === 'string' && value.trim() ? value.trim() : fallback.trim()
 }
 
+function requiredLocalized(localization: Localization, key: string): string {
+  const value = localization[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function nullableInteger(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const parsed = Number(trimmed)
+  if (!Number.isInteger(parsed)) throw new Error(`정수가 아닌 원본 값입니다: ${value}`)
+  return parsed
+}
+
+export function normalizeDamageClass(value: string): 'physical' | 'special' | 'status' {
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'physical' || normalized === 'special' || normalized === 'status') {
+    return normalized
+  }
+  throw new Error(`지원하지 않는 기술 분류입니다: ${value}`)
+}
+
+export function normalizeLearnMethod(
+  value: string,
+): 'level' | 'tm' | 'tutor' | 'egg' | 'legacy' | 'special' | 'form_change' {
+  const normalized = value.trim().toLowerCase()
+  if (['level', 'tm', 'tutor', 'egg', 'legacy', 'special', 'form_change'].includes(normalized)) {
+    return normalized as ReturnType<typeof normalizeLearnMethod>
+  }
+  throw new Error(`지원하지 않는 기술 습득 경로입니다: ${value}`)
+}
+
 function translateConditionPart(part: string, lookups: NameLookups): string | null {
   const value = part.trim()
   let match = value.match(/^Level (\d+)\+$/u)
@@ -171,29 +202,34 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
   const forms = formRows.map((row) => ({
     id: row.FormID,
     speciesId: row.SpeciesID,
+    baseFormId: row.BaseFormID || null,
     nameKo: row.FormKO,
     primaryTypeId: row.Type1 || null,
     secondaryTypeId: row.Type2 || null,
   }))
   const abilities = abilityRows.map((row) => ({
     id: row.AbilityID,
-    nameKo: localized(localization, `cobblemon.ability.${row.AbilityID}`, row.NameKO),
-    descriptionKo: localized(
-      localization,
-      `cobblemon.ability.${row.AbilityID}.desc`,
-      row.Description,
-    ),
+    nameKo: requiredLocalized(localization, `cobblemon.ability.${row.AbilityID}`),
+    descriptionKo: requiredLocalized(localization, `cobblemon.ability.${row.AbilityID}.desc`),
   }))
   const moves = moveRows.map((row) => ({
     id: row.MoveID,
-    nameKo: localized(localization, `cobblemon.move.${row.MoveID}`, row.NameKO),
-    descriptionKo: localized(localization, `cobblemon.move.${row.MoveID}.desc`, row.Description),
+    nameKo: requiredLocalized(localization, `cobblemon.move.${row.MoveID}`),
+    descriptionKo: requiredLocalized(localization, `cobblemon.move.${row.MoveID}.desc`),
     typeId: row.Type,
+    damageClass: normalizeDamageClass(row.Category),
+    power: nullableInteger(row.Power),
+    accuracy: nullableInteger(row.Accuracy),
+    pp: nullableInteger(row.PP),
   }))
   const learnsets = learnsetRows.map((row) => ({
     speciesId: row.SpeciesID,
     formId: row.FormID || null,
     moveId: row.MoveID,
+    learnMethod: normalizeLearnMethod(row.SourceType),
+    learnLevel: row.SourceType === 'level'
+      ? nullableInteger(row.SourceValue || row.MinLevel)
+      : null,
     conditionKo: localizeLearnsetCondition(row.SourceType, row.SourceValue || row.MinLevel),
   }))
   const items = itemRows.map((row) => ({
@@ -214,6 +250,8 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
     formId: row.FormID,
     speciesId: row.SpeciesID,
     abilityId: row.AbilityID,
+    slot: row.Slot,
+    isHidden: row.Hidden.trim().toLowerCase() === 'true',
   }))
   const natures = natureRows.map((row) => ({ id: row.NatureID, nameKo: row.NameKO }))
   const typeMatchups = matchupRows.map((row) => ({
@@ -244,7 +282,7 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
     sha256: Object.fromEntries(
       Object.entries(paths).map(([name, path]) => [name, fileHash(path, 'sha256')]),
     ),
-    reportedCounts: { ...actualCounts, moves: meta.moveCount },
+    reportedCounts: actualCounts,
     types,
     species,
     forms,

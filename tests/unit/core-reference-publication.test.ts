@@ -31,8 +31,8 @@ const dataset: ReferenceDataset = {
     descriptionKo: '여러 모습으로 진화하는 포켓몬.',
   }],
   forms: [
-    { id: 'eevee-normal', speciesId: 'eevee', nameKo: '일반', primaryTypeId: 'normal' },
-    { id: 'eevee-gmax', speciesId: 'eevee', nameKo: 'Gmax', primaryTypeId: 'normal' },
+    { id: 'eevee-normal', speciesId: 'eevee', baseFormId: null, nameKo: '일반', primaryTypeId: 'normal' },
+    { id: 'eevee-gmax', speciesId: 'eevee', baseFormId: 'eevee-normal', nameKo: 'Gmax', primaryTypeId: 'normal' },
   ],
   abilities: [{ id: 'adaptability', nameKo: '적응력', descriptionKo: '같은 타입 기술이 강해진다.' }],
   moves: [],

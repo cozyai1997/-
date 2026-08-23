@@ -33,15 +33,24 @@ export type ReferenceDataset = {
   }>
   forms: Array<KoreanNamedRow & {
     speciesId: string
+    baseFormId: string | null
     primaryTypeId?: string | null
     secondaryTypeId?: string | null
   }>
   abilities: KoreanNamedRow[]
-  moves: Array<KoreanNamedRow & { typeId: string }>
+  moves: Array<KoreanNamedRow & {
+    typeId: string
+    damageClass: 'physical' | 'special' | 'status'
+    power: number | null
+    accuracy: number | null
+    pp: number | null
+  }>
   learnsets: Array<{
     speciesId: string
     formId?: string | null
     moveId: string
+    learnMethod: 'level' | 'tm' | 'tutor' | 'egg' | 'legacy' | 'special' | 'form_change'
+    learnLevel: number | null
     conditionKo: string
   }>
   items: KoreanNamedRow[]
@@ -53,7 +62,13 @@ export type ReferenceDataset = {
     toFormId?: string | null
     conditionKo: string
   }>
-  formAbilities: Array<{ formId: string; speciesId: string; abilityId: string }>
+  formAbilities: Array<{
+    formId: string
+    speciesId: string
+    abilityId: string
+    slot: string
+    isHidden: boolean
+  }>
   natures: KoreanNamedRow[]
   typeMatchups: Array<{
     attackingTypeId: string

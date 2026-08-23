@@ -32,23 +32,23 @@
     }
   ],
   "forms": [
-    { "id": "eevee-normal", "speciesId": "eevee", "nameKo": "일반", "primaryTypeId": "normal" }
+    { "id": "eevee-normal", "speciesId": "eevee", "baseFormId": null, "nameKo": "일반", "primaryTypeId": "normal" }
   ],
   "abilities": [
     { "id": "adaptability", "nameKo": "적응력", "descriptionKo": "Powers up moves of the same type." }
   ],
   "moves": [
-    { "id": "tackle", "nameKo": "몸통박치기", "descriptionKo": "상대에게 몸 전체로 부딪쳐 공격한다.", "typeId": "normal" }
+    { "id": "tackle", "nameKo": "몸통박치기", "descriptionKo": "상대에게 몸 전체로 부딪쳐 공격한다.", "typeId": "normal", "damageClass": "physical", "power": 40, "accuracy": 100, "pp": 35 }
   ],
   "learnsets": [
-    { "speciesId": "eevee", "formId": "eevee-normal", "moveId": "tackle", "conditionKo": "기본 습득" }
+    { "speciesId": "eevee", "formId": "eevee-normal", "moveId": "tackle", "learnMethod": "level", "learnLevel": 1, "conditionKo": "기본 습득" }
   ],
   "items": [
     { "id": "soothe-bell", "nameKo": "평온의방울", "descriptionKo": "지니게 한 포켓몬이 친밀해지기 쉬워진다." }
   ],
   "evolutions": [],
   "formAbilities": [
-    { "formId": "eevee-normal", "speciesId": "eevee", "abilityId": "adaptability" }
+    { "formId": "eevee-normal", "speciesId": "eevee", "abilityId": "adaptability", "slot": "first", "isHidden": false }
   ],
   "natures": [
     { "id": "hardy", "nameKo": "노력" }

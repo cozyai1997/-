@@ -29,6 +29,8 @@ describe('Cobbleverse 원본 조건 한국어 정규화', () => {
     ['tutor', '', '기술 가르침으로 습득'],
     ['egg', '', '유전으로 습득'],
     ['legacy', '', '과거 버전에서 습득'],
+    ['special', '', '특수 조건으로 습득'],
+    ['form_change', '', '폼 변경 시 습득'],
   ])('%s 습득 경로를 한국어로 바꾼다', (sourceType, sourceValue, expected) => {
     expect(localizeLearnsetCondition(sourceType, sourceValue)).toBe(expected)
   })

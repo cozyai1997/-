@@ -19,7 +19,8 @@
     "data:import": "tsx scripts/data/import-reference-data.ts",
     "data:validate": "tsx scripts/data/validate-reference-data.ts",
     "data:publish": "tsx scripts/data/publish-reference-data.ts",
-    "data:publish:core": "tsx scripts/data/publish-core-reference-data.ts"
+    "data:publish:core": "tsx scripts/data/publish-core-reference-data.ts",
+    "data:publish:option-filters": "tsx scripts/data/publish-pokemon-option-filter-reference-data.ts"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.4",
