@@ -198,14 +198,14 @@ export function PokemonRegistrationWizard() {
         createClient(), speciesId, formId,
       )
       if (!mounted.current || requestVersion.current !== version) return
-      setFilteredOptions(loadedOptions)
-      setFilterStatus('loaded')
       if (reconcileAbility) {
         const allowedAbilityIds = new Set(loadedOptions.abilities.map((ability) => ability.id))
         setDraft((current) => current.speciesId === speciesId && current.formId === formId
           ? reconcileFormSelection(current, formId, allowedAbilityIds)
           : current)
       }
+      setFilteredOptions(loadedOptions)
+      setFilterStatus('loaded')
     } catch {
       if (!mounted.current || requestVersion.current !== version) return
       setFilteredOptions(emptyFilteredOptions)
@@ -290,6 +290,7 @@ export function PokemonRegistrationWizard() {
   }
 
   function next() {
+    if (filterBlocked) return
     if (draft.step === 1 && (!draft.speciesId || !draft.formId)) {
       setMessage('포켓몬 종을 선택해 주세요.')
       return
@@ -299,6 +300,7 @@ export function PokemonRegistrationWizard() {
   }
 
   async function submit() {
+    if (filterBlocked) return
     const errors = validateOwnedPokemon(draft)
     if (errors.length) {
       setMessage(errors[0])
@@ -325,6 +327,8 @@ export function PokemonRegistrationWizard() {
     : filterStatus === 'error'
       ? '특성과 기술을 불러오지 못했습니다. 종과 모습을 다시 선택해 주세요.'
       : ''
+  const filterBlocked = Boolean(draft.speciesId && draft.formId)
+    && filterStatus !== 'loaded'
 
   return (
     <section className="registration-card" aria-labelledby="registration-title">
@@ -444,7 +448,7 @@ export function PokemonRegistrationWizard() {
                     moveId={draft.currentMoves[slot]?.moveId ?? ''}
                     moves={filteredOptions.moves}
                     selectedMoveIds={currentMoveIds}
-                    disabled={filterStatus === 'loading' || filterStatus === 'error'}
+                    disabled={filterBlocked || slot > draft.currentMoves.length}
                     onMoveChange={chooseCurrentMove}
                   />
                 ))}
@@ -460,7 +464,7 @@ export function PokemonRegistrationWizard() {
                     conditionKo={draft.targetMoves[slot]?.conditionKo}
                     moves={filteredOptions.moves}
                     selectedMoveIds={targetMoveIds}
-                    disabled={filterStatus === 'loading' || filterStatus === 'error'}
+                    disabled={filterBlocked || slot > draft.targetMoves.length}
                     onMoveChange={chooseTargetMove}
                     onRouteChange={chooseTargetRoute}
                   />
@@ -488,7 +492,9 @@ export function PokemonRegistrationWizard() {
       {message ? <p className="form-error" role="alert">{message}</p> : null}
       <div className="wizard-actions">
         {draft.step > 1 ? <button type="button" className="text-button" onClick={() => update({ step: draft.step - 1 })}>이전</button> : null}
-        {draft.step < 7 ? <button type="button" className="primary-button" onClick={next}>다음</button> : <button type="button" className="primary-button" onClick={submit}>등록 완료</button>}
+        {draft.step < 7
+          ? <button type="button" className="primary-button" onClick={next} disabled={filterBlocked}>다음</button>
+          : <button type="button" className="primary-button" onClick={submit} disabled={filterBlocked}>등록 완료</button>}
       </div>
     </section>
   )

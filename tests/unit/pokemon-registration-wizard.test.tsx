@@ -7,6 +7,10 @@ import type {
   OwnedPokemonEditOptions,
   PokemonFilteredOptions,
 } from '@/features/owned-pokemon/repository'
+import {
+  createRegistrationDraft,
+  registrationDraftKey,
+} from '@/features/owned-pokemon/registration-state'
 
 const {
   replace,
@@ -73,20 +77,33 @@ const waterOptions: PokemonFilteredOptions = {
     descriptionKo: '물 타입 기술을 받으면 회복한다.',
     isHidden: true,
   }],
-  moves: [{
-    id: 'move-surf',
-    nameKo: '파도타기',
-    descriptionKo: '큰 파도로 상대를 공격한다.',
-    typeKo: '물',
-    damageClassKo: '특수',
-    power: 90,
-    accuracy: 100,
-    pp: 15,
-    routes: [
-      { methodKo: '레벨업', conditionKo: '레벨 40에 습득' },
-      { methodKo: '기술머신', conditionKo: '기술머신 123으로 습득' },
-    ],
-  }],
+  moves: [
+    {
+      id: 'move-surf',
+      nameKo: '파도타기',
+      descriptionKo: '큰 파도로 상대를 공격한다.',
+      typeKo: '물',
+      damageClassKo: '특수',
+      power: 90,
+      accuracy: 100,
+      pp: 15,
+      routes: [
+        { methodKo: '레벨업', conditionKo: '레벨 40에 습득' },
+        { methodKo: '기술머신', conditionKo: '기술머신 123으로 습득' },
+      ],
+    },
+    {
+      id: 'move-ice-beam',
+      nameKo: '냉동빔',
+      descriptionKo: '차가운 광선으로 상대를 공격한다.',
+      typeKo: '얼음',
+      damageClassKo: '특수',
+      power: 90,
+      accuracy: 100,
+      pp: 10,
+      routes: [{ methodKo: '기술머신', conditionKo: '기술머신 135로 습득' }],
+    },
+  ],
 }
 
 const waveOptions: PokemonFilteredOptions = {
@@ -138,7 +155,7 @@ describe('포켓몬 등록 필터 선택 UI', () => {
 
   it('정확한 폼의 한국어 특성과 네 칸씩의 현재·목표 기술만 선택하게 한다', async () => {
     const user = userEvent.setup()
-    render(<PokemonRegistrationWizard />)
+    const view = render(<PokemonRegistrationWizard />)
 
     await user.selectOptions(await screen.findByLabelText('포켓몬 종'), 'species-water')
     await user.click(screen.getByRole('button', { name: '다음' }))
@@ -160,10 +177,16 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     }
     expect(screen.queryByRole('option', { name: /십만볼트/u })).not.toBeInTheDocument()
 
+    expect(screen.getByLabelText('현재 기술 2')).toBeDisabled()
+    expect(screen.getByLabelText('목표 기술 2')).toBeDisabled()
     await user.selectOptions(screen.getByLabelText('현재 기술 1'), 'move-surf')
+    expect(screen.getByLabelText('현재 기술 2')).toBeEnabled()
     expect(screen.getByLabelText('현재 기술 2').querySelector('option[value="move-surf"]'))
       .toBeDisabled()
+    await user.selectOptions(screen.getByLabelText('현재 기술 2'), 'move-ice-beam')
     await user.selectOptions(screen.getByLabelText('목표 기술 1'), 'move-surf')
+    expect(screen.getByLabelText('목표 기술 2')).toBeEnabled()
+    await user.selectOptions(screen.getByLabelText('목표 기술 2'), 'move-ice-beam')
     const route = screen.getByLabelText('목표 습득 방법 1')
     await user.selectOptions(route, '기술머신 123으로 습득')
     expect(screen.getAllByText(/물 · 특수 · 위력 90 · 명중 100 · PP 15/u)).toHaveLength(2)
@@ -171,13 +194,87 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     await waitFor(() => {
       expect(JSON.parse(sessionStorage.getItem('pokemon-registration-draft-v2') ?? '{}'))
         .toMatchObject({
-          currentMoves: [{ moveId: 'move-surf' }],
-          targetMoves: [{
-            moveId: 'move-surf',
-            conditionKo: '기술머신 123으로 습득',
-          }],
+          currentMoves: [
+            { moveId: 'move-surf' },
+            { moveId: 'move-ice-beam' },
+          ],
+          targetMoves: [
+            { moveId: 'move-surf', conditionKo: '기술머신 123으로 습득' },
+            { moveId: 'move-ice-beam', conditionKo: '기술머신 135로 습득' },
+          ],
         })
     })
+
+    view.unmount()
+    render(<PokemonRegistrationWizard />)
+    await waitFor(() => {
+      expect(screen.getByLabelText('현재 기술 1')).toHaveValue('move-surf')
+      expect(screen.getByLabelText('현재 기술 2')).toHaveValue('move-ice-beam')
+      expect(screen.getByLabelText('목표 기술 1')).toHaveValue('move-surf')
+      expect(screen.getByLabelText('목표 기술 2')).toHaveValue('move-ice-beam')
+    })
+  })
+
+  it('폼 필터가 성공할 때까지 진행을 막고 유효한 특성과 종별 기술을 유지한다', async () => {
+    const user = userEvent.setup()
+    let resolveWave: ((value: PokemonFilteredOptions) => void) | undefined
+    const retainedWaveOptions: PokemonFilteredOptions = {
+      abilities: waterOptions.abilities,
+      moves: waterOptions.moves,
+    }
+    sessionStorage.setItem(registrationDraftKey, JSON.stringify({
+      ...createRegistrationDraft(),
+      speciesId: 'species-water',
+      formId: 'form-water',
+      abilityId: 'ability-water',
+      currentMoves: [{ moveId: 'move-surf' }],
+      targetMoves: [{ moveId: 'move-surf', conditionKo: '레벨 40에 습득' }],
+    }))
+    listPokemonFilteredOptions.mockImplementation(
+      (_client: unknown, _speciesId: string, formId: string) => formId === 'form-wave'
+        ? new Promise<PokemonFilteredOptions>((resolve) => { resolveWave = resolve })
+        : Promise.resolve(waterOptions),
+    )
+    render(<PokemonRegistrationWizard />)
+
+    const form = await screen.findByLabelText('모습', { exact: true })
+    await waitFor(() => expect(screen.getByRole('button', { name: '다음' })).toBeEnabled())
+    await user.selectOptions(form, 'form-wave')
+    expect(screen.getByRole('button', { name: '다음' })).toBeDisabled()
+    expect(screen.getByRole('status')).toHaveTextContent('특성과 기술을 불러오는 중입니다.')
+
+    resolveWave?.(retainedWaveOptions)
+    await waitFor(() => expect(screen.getByRole('button', { name: '다음' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: '다음' }))
+    await user.click(screen.getByRole('button', { name: '다음' }))
+    expect(screen.getByLabelText('특성', { exact: true })).toHaveValue('ability-water')
+    await waitFor(() => {
+      expect(JSON.parse(sessionStorage.getItem(registrationDraftKey) ?? '{}')).toMatchObject({
+        formId: 'form-wave',
+        abilityId: 'ability-water',
+        currentMoves: [{ moveId: 'move-surf' }],
+        targetMoves: [{ moveId: 'move-surf', conditionKo: '레벨 40에 습득' }],
+      })
+    })
+  })
+
+  it('폼 필터 오류 뒤에는 다음 단계와 등록 완료를 활성화하지 않는다', async () => {
+    sessionStorage.setItem(registrationDraftKey, JSON.stringify({
+      ...createRegistrationDraft(),
+      step: 7,
+      speciesId: 'species-water',
+      formId: 'form-wave',
+      abilityId: 'ability-water',
+    }))
+    listPokemonFilteredOptions.mockRejectedValue(new Error('필터 조회 실패'))
+    render(<PokemonRegistrationWizard />)
+
+    const submit = await screen.findByRole('button', { name: '등록 완료' })
+    expect(submit).toBeDisabled()
+    expect(await screen.findByText(
+      '특성과 기술을 불러오지 못했습니다. 종과 모습을 다시 선택해 주세요.',
+    )).toBeVisible()
+    expect(submit).toBeDisabled()
   })
 
   it('폼 변경은 종별 기술을 유지하면서 허용되지 않는 특성을 지운다', async () => {
