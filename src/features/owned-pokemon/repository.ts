@@ -292,23 +292,32 @@ export type OwnedPokemonEditOptions = {
 }
 
 export async function listSpeciesOptions(client: SupabaseClient<Database>) {
-  const { data, error } = await client
-    .from('reference_species')
-    .select('id, name_ko, national_dex_number, reference_forms(id, name_ko, is_default)')
-    .eq('is_active', true)
-    .order('national_dex_number')
-  if (error) throw error
+  const pageSize = 1_000
+  const speciesOptions: SpeciesOption[] = []
 
-  return data.map((species) => ({
-    id: species.id,
-    nameKo: species.name_ko,
-    nationalDexNumber: species.national_dex_number,
-    forms: species.reference_forms.map((form) => ({
-      id: form.id,
-      nameKo: form.name_ko,
-      isDefault: form.is_default,
-    })),
-  })) satisfies SpeciesOption[]
+  for (let start = 0; ; start += pageSize) {
+    const { data, error } = await client
+      .from('reference_species')
+      .select('id, name_ko, national_dex_number, reference_forms(id, name_ko, is_default)')
+      .eq('is_active', true)
+      .order('national_dex_number')
+      .range(start, start + pageSize - 1)
+    if (error) throw error
+
+    speciesOptions.push(...data.map((species) => ({
+      id: species.id,
+      nameKo: species.name_ko,
+      nationalDexNumber: species.national_dex_number,
+      forms: species.reference_forms.map((form) => ({
+        id: form.id,
+        nameKo: form.name_ko,
+        isDefault: form.is_default,
+      })),
+    })))
+    if (data.length < pageSize) break
+  }
+
+  return speciesOptions
 }
 
 export async function createOwnedPokemon(

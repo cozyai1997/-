@@ -1,17 +1,21 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { createClient } from '@/lib/supabase/client'
 import {
   createOwnedPokemon,
   listOwnedPokemonEditOptions,
+  listPokemonFilteredOptions,
+  type MoveOption,
   type OwnedPokemonEditOptions,
+  type PokemonFilteredOptions,
 } from '@/features/owned-pokemon/repository'
 import {
   createRegistrationDraft,
   readRegistrationDraft,
+  reconcileFormSelection,
   reconcileSpeciesSelection,
   registrationDraftKey,
   type RegistrationDraft,
@@ -19,13 +23,8 @@ import {
 import { statKeys, validateOwnedPokemon } from '@/features/owned-pokemon/schema'
 
 const stepTitles = [
-  '종·모습',
-  '기본 정보',
-  '성격·특성',
-  '원본·실전 IV',
-  'EV',
-  '현재·목표 기술',
-  '이미지·최종 확인',
+  '종·모습', '기본 정보', '성격·특성', '원본·실전 IV', 'EV',
+  '현재·목표 기술', '이미지·최종 확인',
 ]
 
 const statLabels = {
@@ -37,26 +36,191 @@ const statLabels = {
   speed: '스피드',
 } as const
 
+const emptyEditOptions: OwnedPokemonEditOptions = {
+  species: [], natures: [], abilities: [], items: [],
+}
+const emptyFilteredOptions: PokemonFilteredOptions = { abilities: [], moves: [] }
+const moveSlots = [0, 1, 2, 3] as const
+
+type FilterStatus = 'idle' | 'loading' | 'loaded' | 'error'
+
+type MoveSlotProps = {
+  kind: 'current' | 'target'
+  slot: number
+  moveId: string
+  conditionKo?: string
+  moves: MoveOption[]
+  selectedMoveIds: ReadonlySet<string>
+  disabled: boolean
+  onMoveChange: (slot: number, moveId: string) => void
+  onRouteChange?: (slot: number, conditionKo: string) => void
+}
+
+function MoveSlot({
+  kind, slot, moveId, conditionKo, moves, selectedMoveIds, disabled,
+  onMoveChange, onRouteChange,
+}: MoveSlotProps) {
+  const number = slot + 1
+  const kindKo = kind === 'current' ? '현재' : '목표'
+  const selectId = `${kind}-move-${number}`
+  const detailId = `${selectId}-detail`
+  const selectedMove = moves.find((move) => move.id === moveId)
+  const groups = groupMovesByPrimaryRoute(moves)
+
+  return (
+    <div className="move-slot">
+      <label htmlFor={selectId}>{kindKo} 기술 {number}</label>
+      <select
+        id={selectId}
+        value={moveId}
+        disabled={disabled}
+        aria-describedby={selectedMove ? detailId : undefined}
+        onChange={(event) => onMoveChange(slot, event.target.value)}
+      >
+        <option value="">미지정</option>
+        {groups.map(([methodKo, groupedMoves]) => (
+          <optgroup key={methodKo} label={methodKo}>
+            {groupedMoves.map((move) => (
+              <option
+                key={move.id}
+                value={move.id}
+                disabled={move.id !== moveId && selectedMoveIds.has(move.id)}
+              >
+                {moveOptionLabel(move)}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      {selectedMove ? (
+        <div id={detailId} className="move-details">
+          <p>{moveDetailLabel(selectedMove)}</p>
+          <p>{selectedMove.descriptionKo}</p>
+        </div>
+      ) : null}
+      {kind === 'target' && selectedMove && selectedMove.routes.length > 1 ? (
+        <>
+          <label htmlFor={`target-route-${number}`}>목표 습득 방법 {number}</label>
+          <select
+            id={`target-route-${number}`}
+            value={conditionKo ?? selectedMove.routes[0].conditionKo}
+            onChange={(event) => onRouteChange?.(slot, event.target.value)}
+          >
+            {selectedMove.routes.map((route) => (
+              <option key={`${route.methodKo}-${route.conditionKo}`} value={route.conditionKo}>
+                {route.methodKo} · {route.conditionKo}
+              </option>
+            ))}
+          </select>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+function groupMovesByPrimaryRoute(moves: MoveOption[]) {
+  const groups = new Map<string, MoveOption[]>()
+  for (const move of moves) {
+    const methodKo = move.routes[0]?.methodKo ?? '기타 습득 방법'
+    const group = groups.get(methodKo) ?? []
+    group.push(move)
+    groups.set(methodKo, group)
+  }
+  return [...groups.entries()]
+}
+
+function moveOptionLabel(move: MoveOption) {
+  const routeSummary = move.routes
+    .map((route) => `${route.methodKo} ${route.conditionKo}`)
+    .join(' / ')
+  return `${move.nameKo} · ${routeSummary}`
+}
+
+function moveDetailLabel(move: MoveOption) {
+  return [
+    move.typeKo,
+    move.damageClassKo,
+    `위력 ${move.power ?? '해당 없음'}`,
+    `명중 ${move.accuracy ?? '해당 없음'}`,
+    `PP ${move.pp ?? '해당 없음'}`,
+  ].join(' · ')
+}
+
+function selectedMoveNames(
+  selected: ReadonlyArray<{ moveId: string }>,
+  moves: MoveOption[],
+) {
+  const names = selected
+    .map((entry) => moves.find((move) => move.id === entry.moveId)?.nameKo)
+    .filter((name): name is string => Boolean(name))
+  return names.length ? names.join(', ') : '미지정'
+}
+
 export function PokemonRegistrationWizard() {
   const router = useRouter()
   const [draft, setDraft] = useState<RegistrationDraft>(createRegistrationDraft)
-  const [options, setOptions] = useState<OwnedPokemonEditOptions>({
-    species: [],
-    natures: [],
-    abilities: [],
-    items: [],
-  })
+  const [options, setOptions] = useState<OwnedPokemonEditOptions>(emptyEditOptions)
+  const [filteredOptions, setFilteredOptions] = useState<PokemonFilteredOptions>(
+    emptyFilteredOptions,
+  )
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>('idle')
   const [ready, setReady] = useState(false)
   const [message, setMessage] = useState('')
+  const requestVersion = useRef(0)
+  const mounted = useRef(true)
   const selectedSpecies = useMemo(
     () => options.species.find((item) => item.id === draft.speciesId),
     [draft.speciesId, options.species],
   )
+  const selectedAbility = filteredOptions.abilities.find(
+    (ability) => ability.id === draft.abilityId,
+  )
+  const currentMoveIds = new Set(draft.currentMoves.map((move) => move.moveId))
+  const targetMoveIds = new Set(draft.targetMoves.map((move) => move.moveId))
+  const serializedDraft = JSON.stringify(draft)
+
+  const loadFilteredOptions = useCallback(async (
+    speciesId: string,
+    formId: string,
+    reconcileAbility: boolean,
+  ) => {
+    const version = ++requestVersion.current
+    if (!speciesId || !formId) {
+      setFilteredOptions(emptyFilteredOptions)
+      setFilterStatus('idle')
+      return
+    }
+
+    setFilteredOptions(emptyFilteredOptions)
+    setFilterStatus('loading')
+    try {
+      const loadedOptions = await listPokemonFilteredOptions(
+        createClient(), speciesId, formId,
+      )
+      if (!mounted.current || requestVersion.current !== version) return
+      setFilteredOptions(loadedOptions)
+      setFilterStatus('loaded')
+      if (reconcileAbility) {
+        const allowedAbilityIds = new Set(loadedOptions.abilities.map((ability) => ability.id))
+        setDraft((current) => current.speciesId === speciesId && current.formId === formId
+          ? reconcileFormSelection(current, formId, allowedAbilityIds)
+          : current)
+      }
+    } catch {
+      if (!mounted.current || requestVersion.current !== version) return
+      setFilteredOptions(emptyFilteredOptions)
+      setFilterStatus('error')
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
+    mounted.current = true
+    const restoredDraft = readRegistrationDraft(sessionStorage)
     queueMicrotask(() => {
-      if (active) setDraft(readRegistrationDraft(sessionStorage))
+      if (!active) return
+      setDraft(restoredDraft)
+      void loadFilteredOptions(restoredDraft.speciesId, restoredDraft.formId, true)
     })
     listOwnedPokemonEditOptions(createClient())
       .then((loadedOptions) => {
@@ -70,12 +234,14 @@ export function PokemonRegistrationWizard() {
       })
     return () => {
       active = false
+      mounted.current = false
+      requestVersion.current += 1
     }
-  }, [])
+  }, [loadFilteredOptions])
 
   useEffect(() => {
-    if (ready) sessionStorage.setItem(registrationDraftKey, JSON.stringify(draft))
-  }, [draft, ready])
+    if (ready) sessionStorage.setItem(registrationDraftKey, serializedDraft)
+  }, [ready, serializedDraft])
 
   function update(patch: Partial<RegistrationDraft>) {
     setDraft((current) => ({ ...current, ...patch }))
@@ -84,7 +250,43 @@ export function PokemonRegistrationWizard() {
   function chooseSpecies(speciesId: string) {
     const option = options.species.find((item) => item.id === speciesId)
     const form = option?.forms.find((item) => item.isDefault) ?? option?.forms[0]
-    setDraft((current) => reconcileSpeciesSelection(current, speciesId, form?.id ?? ''))
+    const formId = form?.id ?? ''
+    setDraft((current) => reconcileSpeciesSelection(current, speciesId, formId))
+    void loadFilteredOptions(speciesId, formId, false)
+  }
+
+  function chooseForm(formId: string) {
+    const speciesId = draft.speciesId
+    setDraft((current) => ({ ...current, formId }))
+    void loadFilteredOptions(speciesId, formId, true)
+  }
+
+  function chooseCurrentMove(slot: number, moveId: string) {
+    setDraft((current) => {
+      const currentMoves = [...current.currentMoves]
+      if (moveId) currentMoves[slot] = { moveId }
+      else currentMoves.splice(slot, 1)
+      return { ...current, currentMoves: currentMoves.filter(Boolean).slice(0, 4) }
+    })
+  }
+
+  function chooseTargetMove(slot: number, moveId: string) {
+    const move = filteredOptions.moves.find((option) => option.id === moveId)
+    setDraft((current) => {
+      const targetMoves = [...current.targetMoves]
+      if (move) targetMoves[slot] = { moveId, conditionKo: move.routes[0]?.conditionKo ?? '' }
+      else targetMoves.splice(slot, 1)
+      return { ...current, targetMoves: targetMoves.filter(Boolean).slice(0, 4) }
+    })
+  }
+
+  function chooseTargetRoute(slot: number, conditionKo: string) {
+    setDraft((current) => ({
+      ...current,
+      targetMoves: current.targetMoves.map((move, index) => index === slot
+        ? { ...move, conditionKo }
+        : move),
+    }))
   }
 
   function next() {
@@ -118,6 +320,12 @@ export function PokemonRegistrationWizard() {
     }
   }
 
+  const filterStatusMessage = filterStatus === 'loading'
+    ? '특성과 기술을 불러오는 중입니다.'
+    : filterStatus === 'error'
+      ? '특성과 기술을 불러오지 못했습니다. 종과 모습을 다시 선택해 주세요.'
+      : ''
+
   return (
     <section className="registration-card" aria-labelledby="registration-title">
       <div className="registration-progress">
@@ -125,6 +333,12 @@ export function PokemonRegistrationWizard() {
         <progress value={draft.step} max={7}>7단계 중 {draft.step}단계</progress>
       </div>
       <h1 id="registration-title">{stepTitles[draft.step - 1]}</h1>
+
+      {filterStatusMessage ? (
+        <p className={filterStatus === 'error' ? 'form-error' : 'filter-status'} role="status" aria-live="polite">
+          {filterStatusMessage}
+        </p>
+      ) : null}
 
       <div className="registration-fields">
         {draft.step === 1 ? (
@@ -139,7 +353,7 @@ export function PokemonRegistrationWizard() {
               ))}
             </select>
             <label htmlFor="form">모습</label>
-            <select id="form" value={draft.formId} onChange={(event) => update({ formId: event.target.value })}>
+            <select id="form" value={draft.formId} onChange={(event) => chooseForm(event.target.value)} disabled={!draft.speciesId}>
               {(selectedSpecies?.forms ?? []).map((form) => <option key={form.id} value={form.id}>{form.nameKo}</option>)}
             </select>
           </>
@@ -171,9 +385,24 @@ export function PokemonRegistrationWizard() {
               <option value="">미지정</option>{options.natures.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
             </select>
             <label htmlFor="ability">특성</label>
-            <select id="ability" value={draft.abilityId ?? ''} onChange={(event) => update({ abilityId: event.target.value || null })}>
-              <option value="">미지정</option>{options.abilities.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
+            <select
+              id="ability"
+              value={draft.abilityId ?? ''}
+              disabled={filterStatus === 'loading' || filterStatus === 'error'}
+              aria-describedby={selectedAbility ? 'selected-ability-description' : undefined}
+              onChange={(event) => update({ abilityId: event.target.value || null })}
+            >
+              <option value="">미지정</option>
+              {filteredOptions.abilities.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.nameKo}{item.isHidden ? ' · 숨겨진 특성' : ''}
+                </option>
+              ))}
             </select>
+            {selectedAbility ? <p id="selected-ability-description">{selectedAbility.descriptionKo}</p> : null}
+            {filterStatus === 'loaded' && filteredOptions.abilities.length === 0
+              ? <p role="status" aria-live="polite">선택한 모습에 등록된 특성이 없습니다.</p>
+              : null}
           </>
         ) : null}
         {draft.step === 4 ? (
@@ -201,7 +430,43 @@ export function PokemonRegistrationWizard() {
         ) : null}
         {draft.step === 6 ? (
           <>
-            <p>현재 기술과 목표 기술은 기술 적법성 기능에서 연결됩니다.</p>
+            {filterStatus === 'loaded' && filteredOptions.moves.length === 0
+              ? <p role="status" aria-live="polite">선택한 종에 등록된 기술이 없습니다.</p>
+              : null}
+            <div className="move-slot-grid">
+              <fieldset>
+                <legend>현재 기술</legend>
+                {moveSlots.map((slot) => (
+                  <MoveSlot
+                    key={`current-${slot}`}
+                    kind="current"
+                    slot={slot}
+                    moveId={draft.currentMoves[slot]?.moveId ?? ''}
+                    moves={filteredOptions.moves}
+                    selectedMoveIds={currentMoveIds}
+                    disabled={filterStatus === 'loading' || filterStatus === 'error'}
+                    onMoveChange={chooseCurrentMove}
+                  />
+                ))}
+              </fieldset>
+              <fieldset>
+                <legend>목표 기술</legend>
+                {moveSlots.map((slot) => (
+                  <MoveSlot
+                    key={`target-${slot}`}
+                    kind="target"
+                    slot={slot}
+                    moveId={draft.targetMoves[slot]?.moveId ?? ''}
+                    conditionKo={draft.targetMoves[slot]?.conditionKo}
+                    moves={filteredOptions.moves}
+                    selectedMoveIds={targetMoveIds}
+                    disabled={filterStatus === 'loading' || filterStatus === 'error'}
+                    onMoveChange={chooseTargetMove}
+                    onRouteChange={chooseTargetRoute}
+                  />
+                ))}
+              </fieldset>
+            </div>
             <label htmlFor="held-item">지닌 도구</label>
             <select id="held-item" value={draft.heldItemId ?? ''} onChange={(event) => update({ heldItemId: event.target.value || null })}>
               <option value="">없음</option>{options.items.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
@@ -212,6 +477,9 @@ export function PokemonRegistrationWizard() {
           <div className="registration-summary">
             <strong>{draft.nickname || selectedSpecies?.nameKo || '이름 없음'}</strong>
             <span>{selectedSpecies?.nameKo} · Lv. {draft.level}</span>
+            <p>특성: {selectedAbility?.nameKo ?? '미지정'}</p>
+            <p>현재 기술: {selectedMoveNames(draft.currentMoves, filteredOptions.moves)}</p>
+            <p>목표 기술: {selectedMoveNames(draft.targetMoves, filteredOptions.moves)}</p>
             <p>개인 이미지는 다음 단계에서 비공개 업로드로 지원됩니다.</p>
           </div>
         ) : null}
