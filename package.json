@@ -15,7 +15,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "data:import": "tsx scripts/data/import-reference-data.ts",
+    "data:validate": "tsx scripts/data/validate-reference-data.ts",
+    "data:publish": "tsx scripts/data/publish-reference-data.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.112.3",
@@ -32,12 +35,14 @@
     "@types/node": "26.2.0",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
+    "csv-parse": "7.0.2",
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.2",
     "jsdom": "30.0.1",
     "postcss": "8.5.26",
     "supabase": "2.115.0",
     "tailwindcss": "4.3.3",
+    "tsx": "4.23.12",
     "typescript": "5.9.3",
     "vitest": "4.1.11"
   }

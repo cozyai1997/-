@@ -1,0 +1,59 @@
+{
+  "version": "fixture-english-v1",
+  "sourceCommits": {
+    "cobblemon": "d1b8094539f2dd23bd98c1a48293fac1f2010c16",
+    "koreanLocalization": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "sha256": {
+    "dataset": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "reportedCounts": {
+    "types": 1,
+    "species": 1,
+    "forms": 1,
+    "abilities": 1,
+    "moves": 1,
+    "learnsets": 1,
+    "items": 1,
+    "evolutions": 0,
+    "formAbilities": 1,
+    "natures": 1,
+    "typeMatchups": 1
+  },
+  "types": [
+    { "id": "normal", "nameKo": "노말" }
+  ],
+  "species": [
+    {
+      "id": "eevee",
+      "nationalDexNumber": 133,
+      "nameKo": "이브이",
+      "descriptionKo": "불규칙한 유전자를 지녀 다양한 모습으로 진화할 수 있다."
+    }
+  ],
+  "forms": [
+    { "id": "eevee-normal", "speciesId": "eevee", "nameKo": "일반", "primaryTypeId": "normal" }
+  ],
+  "abilities": [
+    { "id": "adaptability", "nameKo": "적응력", "descriptionKo": "Powers up moves of the same type." }
+  ],
+  "moves": [
+    { "id": "tackle", "nameKo": "몸통박치기", "descriptionKo": "상대에게 몸 전체로 부딪쳐 공격한다.", "typeId": "normal" }
+  ],
+  "learnsets": [
+    { "speciesId": "eevee", "formId": "eevee-normal", "moveId": "tackle", "conditionKo": "기본 습득" }
+  ],
+  "items": [
+    { "id": "soothe-bell", "nameKo": "평온의방울", "descriptionKo": "지니게 한 포켓몬이 친밀해지기 쉬워진다." }
+  ],
+  "evolutions": [],
+  "formAbilities": [
+    { "formId": "eevee-normal", "speciesId": "eevee", "abilityId": "adaptability" }
+  ],
+  "natures": [
+    { "id": "hardy", "nameKo": "노력" }
+  ],
+  "typeMatchups": [
+    { "attackingTypeId": "normal", "defendingTypeId": "normal", "multiplier": 1 }
+  ]
+}

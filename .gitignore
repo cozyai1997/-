@@ -8,6 +8,7 @@ test-results/
 .env.*
 !.env.example
 .vercel/
+.reference-data/
 .DS_Store
 *.log
 *.tsbuildinfo
