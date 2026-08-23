@@ -10,6 +10,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 type LocalEnvironment = { API_URL: string; ANON_KEY: string; SERVICE_ROLE_KEY: string }
 type Identity = { client: SupabaseClient; id: string }
 
+const describeLocalSupabase = process.env.RUN_SUPABASE_INTEGRATION === '1' ? describe : describe.skip
+
 const bucket = 'private-pokemon-images'
 const userIds: string[] = []
 let admin: SupabaseClient
@@ -21,7 +23,7 @@ let pokemonId = ''
 let objectPath = ''
 let webp: Buffer
 
-describe('사용자별 비공개 포켓몬 이미지', () => {
+describeLocalSupabase('사용자별 비공개 포켓몬 이미지', () => {
   beforeAll(async () => {
     const environment = readLocalEnvironment()
     admin = createClient(environment.API_URL, environment.SERVICE_ROLE_KEY, {

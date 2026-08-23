@@ -11,7 +11,9 @@ type LocalEnvironment = { API_URL: string; SERVICE_ROLE_KEY: string }
 let admin: SupabaseClient
 const ids = {
   publication: randomUUID(),
-  batch: randomUUID(),
+  failedBatch: randomUUID(),
+  firstSuccessfulBatch: randomUUID(),
+  secondSuccessfulBatch: randomUUID(),
   type: randomUUID(),
   species: randomUUID(),
   invalidSpecies: randomUUID(),
@@ -64,19 +66,28 @@ begin
     values ('${ids.publication}', '${ids.form}', '${ids.ability}', 'first', false);
   insert into public.reference_move_learnsets (publication_id, species_id, form_id, move_id, learn_method, learn_level, condition_ko)
     values ('${ids.publication}', '${ids.species}', null, '${ids.move}', 'level', 0, '레벨 상승으로 습득');
-  insert into public.reference_option_filter_publication_staging (batch_id, publication_id, row_kind, source_order, payload)
-  select '${ids.batch}', '${ids.publication}', 'form_ability', value,
-    jsonb_build_object('form_id', '${ids.form}', 'ability_id', '${ids.ability}', 'slot', 'first', 'is_hidden', false)
-  from generate_series(0, 3054) as value;
-  insert into public.reference_option_filter_publication_staging (batch_id, publication_id, row_kind, source_order, payload)
-  select '${ids.batch}', '${ids.publication}', 'learnset', value,
-    jsonb_build_object('species_id', '${ids.invalidSpecies}', 'form_id', null, 'move_id', '${ids.move}', 'learn_method', 'level', 'learn_level', 0, 'condition_ko', '레벨 상승으로 습득')
-  from generate_series(0, 116518) as value;
 end
 $setup$;`
 }
 
-describe('포켓몬 선택 필터 원자 교체', () => {
+function stagedRowsSql(batchId: string, speciesId: string): string {
+  return `do $stage$
+begin
+  insert into public.reference_option_filter_publication_staging (batch_id, publication_id, row_kind, source_order, payload)
+  select '${batchId}', '${ids.publication}', 'form_ability', value,
+    jsonb_build_object('form_id', '${ids.form}', 'ability_id', '${ids.ability}', 'slot', 'first', 'is_hidden', false)
+  from generate_series(0, 3054) as value;
+  insert into public.reference_option_filter_publication_staging (batch_id, publication_id, row_kind, source_order, payload)
+  select '${batchId}', '${ids.publication}', 'learnset', value,
+    jsonb_build_object('species_id', '${speciesId}', 'form_id', null, 'move_id', '${ids.move}', 'learn_method', 'level', 'learn_level', 0, 'condition_ko', '레벨 상승으로 습득')
+  from generate_series(0, 116518) as value;
+end
+$stage$;`
+}
+
+const describeLocalSupabase = process.env.RUN_SUPABASE_INTEGRATION === '1' ? describe : describe.skip
+
+describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
   beforeAll(() => {
     const environment = localEnvironment()
     admin = createClient(environment.API_URL, environment.SERVICE_ROLE_KEY, {
@@ -87,7 +98,7 @@ describe('포켓몬 선택 필터 원자 교체', () => {
 
   afterAll(async () => {
     if (!admin) return
-    await admin.from('reference_option_filter_publication_staging').delete().eq('batch_id', ids.batch)
+    await admin.from('reference_option_filter_publication_staging').delete().eq('publication_id', ids.publication)
     await admin.from('reference_form_abilities').delete().eq('publication_id', ids.publication)
     await admin.from('reference_move_learnsets').delete().eq('publication_id', ids.publication)
     await admin.from('reference_moves').delete().eq('id', ids.move)
@@ -99,9 +110,10 @@ describe('포켓몬 선택 필터 원자 교체', () => {
   })
 
   it('교체 RPC의 FK 실패 후에도 기존 live 관계 행을 보존한다', async () => {
+    runLocalSql(stagedRowsSql(ids.failedBatch, ids.invalidSpecies))
     const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
       p_publication_id: ids.publication,
-      p_batch_id: ids.batch,
+      p_batch_id: ids.failedBatch,
     })
     expect(replacement.error?.code).toBe('23503')
 
@@ -111,5 +123,31 @@ describe('포켓몬 선택 필터 원자 교체', () => {
     ])
     expect(abilities.data).toEqual([{ ability_id: ids.ability }])
     expect(learnsets.data).toEqual([{ move_id: ids.move, learn_level: 0 }])
-  })
+    const cleanup = await admin.from('reference_option_filter_publication_staging').delete().eq('batch_id', ids.failedBatch)
+    expect(cleanup.error).toBeNull()
+  }, 30_000)
+
+  it('같은 publication을 두 번 완전히 교체해도 정확한 관계와 staging 정리가 유지된다', async () => {
+    for (const batchId of [ids.firstSuccessfulBatch, ids.secondSuccessfulBatch]) {
+      runLocalSql(stagedRowsSql(batchId, ids.species))
+      const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+        p_publication_id: ids.publication,
+        p_batch_id: batchId,
+      })
+      expect(replacement.error).toBeNull()
+    }
+
+    const [formAbilityCount, learnsetCount, formAbility, learnset, stagingResidue] = await Promise.all([
+      admin.from('reference_form_abilities').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_move_learnsets').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_form_abilities').select('form_id,ability_id,slot,is_hidden').eq('publication_id', ids.publication).limit(1),
+      admin.from('reference_move_learnsets').select('species_id,move_id,learn_level').eq('publication_id', ids.publication).limit(1),
+      admin.from('reference_option_filter_publication_staging').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+    ])
+    expect(formAbilityCount.count).toBe(3055)
+    expect(learnsetCount.count).toBe(116519)
+    expect(formAbility.data).toEqual([{ form_id: ids.form, ability_id: ids.ability, slot: 'first', is_hidden: false }])
+    expect(learnset.data).toEqual([{ species_id: ids.species, move_id: ids.move, learn_level: 0 }])
+    expect(stagingResidue.count).toBe(0)
+  }, 30_000)
 })

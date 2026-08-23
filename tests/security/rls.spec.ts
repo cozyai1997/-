@@ -17,6 +17,8 @@ type TestIdentity = {
   id: string
 }
 
+const describeLocalSupabase = process.env.RUN_SUPABASE_INTEGRATION === '1' ? describe : describe.skip
+
 const identities: string[] = []
 let admin: SupabaseClient
 let alice: TestIdentity
@@ -85,7 +87,7 @@ async function createIdentity(
   return { client, id: created.data.user.id }
 }
 
-describe('사용자별 보유 포켓몬 RLS', () => {
+describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
   beforeAll(async () => {
     const environment = readLocalSupabaseEnvironment()
     admin = createClient(environment.API_URL, environment.SERVICE_ROLE_KEY, {
