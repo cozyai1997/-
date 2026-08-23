@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" role="img" aria-labelledby="title description">
+  <title id="title">등록 이미지 없음</title>
+  <desc id="description">특정 캐릭터를 닮지 않은 중립적인 둥근 도형</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#18314d"/>
+      <stop offset="1" stop-color="#0b1726"/>
+    </linearGradient>
+  </defs>
+  <rect width="320" height="320" rx="32" fill="url(#background)"/>
+  <circle cx="160" cy="126" r="58" fill="#7692ad" opacity=".72"/>
+  <path d="M70 274c8-58 42-88 90-88s82 30 90 88" fill="#7692ad" opacity=".72"/>
+  <circle cx="160" cy="160" r="132" fill="none" stroke="#a9c3dc" stroke-width="5" opacity=".24"/>
+</svg>

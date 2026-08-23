@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useMemo, useState } from 'react'
 
+import { PrivatePokemonImage } from '@/components/pokemon/private-pokemon-image'
 import {
   correctOwnedPokemon,
   type OwnedPokemonDetail,
@@ -25,9 +26,11 @@ const statLabels = {
 type PokemonDetailEditorProps = {
   initialPokemon: OwnedPokemonDetail
   options: OwnedPokemonEditOptions
+  dex: number
+  entry: number
 }
 
-export function PokemonDetailEditor({ initialPokemon, options }: PokemonDetailEditorProps) {
+export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: PokemonDetailEditorProps) {
   const router = useRouter()
   const [pokemon, setPokemon] = useState(initialPokemon)
   const [draft, setDraft] = useState(initialPokemon)
@@ -36,6 +39,7 @@ export function PokemonDetailEditor({ initialPokemon, options }: PokemonDetailEd
   const [correctionOpen, setCorrectionOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [pending, setPending] = useState(false)
+  const [imageRevision, setImageRevision] = useState(0)
   const correctionSpecies = useMemo(
     () => options.species.find((item) => item.id === correction.speciesId),
     [correction.speciesId, options.species],
@@ -100,9 +104,89 @@ export function PokemonDetailEditor({ initialPokemon, options }: PokemonDetailEd
     }))
   }
 
+  async function uploadPrivateImage(file: File | undefined) {
+    if (!file) return
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setMessage('JPEG, PNG, WebP 이미지만 업로드할 수 있습니다.')
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setMessage('이미지는 5 MiB 이하만 업로드할 수 있습니다.')
+      return
+    }
+
+    setPending(true)
+    const query = `dex=${String(dex).padStart(4, '0')}&entry=${entry}`
+    try {
+      const prepared = await fetch(`/api/private-images?${query}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mimeType: file.type, byteSize: file.size }),
+      })
+      const preparedBody = await prepared.json() as {
+        path?: string
+        token?: string
+        error?: string
+      }
+      if (!prepared.ok || !preparedBody.path || !preparedBody.token) {
+        throw new Error(preparedBody.error ?? '업로드 주소를 만들지 못했습니다.')
+      }
+
+      const uploaded = await createClient().storage.from('private-pokemon-images').uploadToSignedUrl(
+        preparedBody.path,
+        preparedBody.token,
+        file,
+        { contentType: file.type },
+      )
+      if (uploaded.error) throw uploaded.error
+
+      const processed = await fetch(`/api/private-images?${query}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: preparedBody.path }),
+      })
+      const processedBody = await processed.json() as { message?: string; error?: string }
+      if (!processed.ok) throw new Error(processedBody.error ?? '이미지를 처리하지 못했습니다.')
+      setImageRevision((current) => current + 1)
+      setMessage(processedBody.message ?? '비공개 이미지를 저장했습니다.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '비공개 이미지를 저장하지 못했습니다.')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  async function deletePrivateImage() {
+    if (!window.confirm('등록한 비공개 이미지를 삭제할까요?')) return
+    setPending(true)
+    try {
+      const response = await fetch(
+        `/api/private-images?dex=${String(dex).padStart(4, '0')}&entry=${entry}`,
+        { method: 'DELETE' },
+      )
+      if (!response.ok) {
+        const body = await response.json() as { error?: string }
+        throw new Error(body.error ?? '이미지를 삭제하지 못했습니다.')
+      }
+      setImageRevision((current) => current + 1)
+      setMessage('비공개 이미지를 삭제했습니다.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '비공개 이미지를 삭제하지 못했습니다.')
+    } finally {
+      setPending(false)
+    }
+  }
+
   return (
     <>
       <div className="detail-heading">
+        <PrivatePokemonImage
+          dex={dex}
+          entry={entry}
+          revision={imageRevision}
+          alt={`${pokemon.nickname || pokemon.nameKo} 개인 이미지`}
+          className="detail-pokemon-image"
+        />
         <div>
           <Link className="back-link" href="/my-pokemon">← 내 포켓몬</Link>
           <p className="eyebrow">도감번호 #{String(pokemon.nationalDexNumber).padStart(4, '0')}</p>
@@ -112,6 +196,25 @@ export function PokemonDetailEditor({ initialPokemon, options }: PokemonDetailEd
           <p>포획일: {pokemon.capturedOn || '미입력'}</p>
         </div>
       </div>
+
+      <section className="detail-panel image-panel" aria-labelledby="private-image-title">
+        <h2 id="private-image-title">비공개 개인 이미지</h2>
+        <p>JPEG·PNG·WebP, 최대 5 MiB. 메타데이터를 제거하고 최대 1,024px WebP로 저장합니다.</p>
+        <label className="secondary-button file-button" htmlFor="private-image-upload">
+          이미지 선택
+        </label>
+        <input
+          id="private-image-upload"
+          className="visually-hidden"
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          disabled={pending}
+          onChange={(event) => uploadPrivateImage(event.target.files?.[0])}
+        />
+        <button type="button" className="text-button" disabled={pending} onClick={deletePrivateImage}>
+          등록 이미지 삭제
+        </button>
+      </section>
 
       <div className="detail-grid">
         <section className="detail-panel" aria-labelledby="quick-edit-title">

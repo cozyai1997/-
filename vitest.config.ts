@@ -9,6 +9,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    fileParallelism: false,
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
     include: [

@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import type { Route } from 'next'
 
+import { PrivatePokemonImage } from '@/components/pokemon/private-pokemon-image'
 import { listOwnedPokemon } from '@/features/owned-pokemon/repository'
 import { createClient } from '@/lib/supabase/server'
 
@@ -15,8 +16,13 @@ export default async function MyPokemonPage() {
       </div>
       {pokemon.length ? (
         <section className="pokemon-card-grid" aria-label="보유 포켓몬 목록">
-          {pokemon.map((item, index) => (
-            <article className="pokemon-card" key={`${item.nationalDexNumber}-${index}`}>
+          {pokemon.map((item) => (
+            <article className="pokemon-card" key={`${item.nationalDexNumber}-${item.entry}`}>
+              <PrivatePokemonImage
+                dex={item.nationalDexNumber}
+                entry={item.entry}
+                alt={`${item.nickname || item.nameKo} 개인 이미지`}
+              />
               <span className="dex-number">도감번호 #{String(item.nationalDexNumber).padStart(4, '0')}</span>
               <h2>{item.nickname || item.nameKo}</h2>
               <p>{item.nameKo} · {item.formNameKo}</p>

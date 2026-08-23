@@ -348,6 +348,16 @@ kbd {
   background: linear-gradient(145deg, var(--surface-strong), var(--surface));
 }
 
+.private-pokemon-image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: #0b1726;
+  object-fit: cover;
+}
+
 .pokemon-card h2 {
   margin: 0.75rem 0 0;
 }
@@ -460,8 +470,16 @@ kbd {
 }
 
 .detail-heading {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
   border-bottom: 1px solid var(--border);
   padding-bottom: 1.25rem;
+}
+
+.detail-pokemon-image {
+  width: clamp(8rem, 20vw, 13rem);
+  flex: 0 0 auto;
 }
 
 .detail-heading h1 {
@@ -558,6 +576,25 @@ kbd {
   border-color: #695733;
 }
 
+.image-panel {
+  margin-top: 1rem;
+}
+
+.file-button {
+  display: inline-block;
+  margin-right: 1rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .secondary-button {
   border: 1px solid var(--border);
   border-radius: 0.65rem;
@@ -621,6 +658,11 @@ kbd {
 
   .detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .detail-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .compact-stat-grid {

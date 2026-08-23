@@ -26,7 +26,7 @@ export default async function PokemonDetailPage({ searchParams }: DetailPageProp
 
   return (
     <main className="owned-page">
-      <PokemonDetailEditor initialPokemon={pokemon} options={options} />
+      <PokemonDetailEditor initialPokemon={pokemon} options={options} dex={dex} entry={entry} />
     </main>
   )
 }
