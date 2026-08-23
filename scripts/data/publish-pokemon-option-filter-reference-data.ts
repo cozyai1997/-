@@ -83,9 +83,19 @@ export async function stageThenReplacePublicationRows<T>(
   size: number,
   stage: (batch: T[]) => Promise<void>,
   replace: () => Promise<void>,
+  cleanup: () => Promise<void> = async () => {},
 ): Promise<void> {
-  for (const batch of chunks(rows, size)) await stage(batch)
-  await replace()
+  try {
+    for (const batch of chunks(rows, size)) await stage(batch)
+    await replace()
+  } catch (error) {
+    try {
+      await cleanup()
+    } catch {
+      // The original staging or replacement failure is the actionable error.
+    }
+    throw error
+  }
 }
 
 export function assertOptionFilterPublicationCounts(
@@ -233,6 +243,14 @@ export async function publishPokemonOptionFilterReferenceData(
       payload: row,
     })),
   ]
+  const cleanupStagedAttempt = async () => {
+    const { error } = await client
+      .from('reference_option_filter_publication_staging')
+      .delete()
+      .eq('batch_id', batchId)
+      .eq('publication_id', publicationId)
+    if (error) throw new Error(`포켓몬 선택 필터 스테이징 정리 실패: ${error.message}`)
+  }
   await stageThenReplacePublicationRows(
     stagedRows,
     batchSize,
@@ -244,6 +262,7 @@ export async function publishPokemonOptionFilterReferenceData(
       })
       if (error) throw new Error(`포켓몬 선택 필터 교체 실패: ${error.message}`)
     },
+    cleanupStagedAttempt,
   )
 
   return { moves: moves.length, formAbilities: formAbilities.length, learnsets: learnsets.length }

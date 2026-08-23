@@ -56,12 +56,30 @@ describe('포켓몬 선택 필터 게시', () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('second batch failed'))
     const replace = vi.fn().mockResolvedValue(undefined)
+    const cleanup = vi.fn().mockRejectedValue(new Error('cleanup must not mask stage failure'))
 
-    await expect(stageThenReplacePublicationRows([1, 2, 3], 2, stage, replace))
+    await expect((stageThenReplacePublicationRows as unknown as (
+      rows: number[], size: number, stage: (batch: number[]) => Promise<void>, replace: () => Promise<void>, cleanup: () => Promise<void>,
+    ) => Promise<void>)([1, 2, 3], 2, stage, replace, cleanup))
       .rejects.toThrow('second batch failed')
 
     expect(stage).toHaveBeenCalledTimes(2)
     expect(replace).not.toHaveBeenCalled()
+    expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+
+  it('교체 RPC가 실패하면 원래 오류를 유지하면서 해당 시도의 스테이징을 정리한다', async () => {
+    const stage = vi.fn().mockResolvedValue(undefined)
+    const replace = vi.fn().mockRejectedValue(new Error('replacement RPC failed'))
+    const cleanup = vi.fn().mockResolvedValue(undefined)
+
+    await expect((stageThenReplacePublicationRows as unknown as (
+      rows: number[], size: number, stage: (batch: number[]) => Promise<void>, replace: () => Promise<void>, cleanup: () => Promise<void>,
+    ) => Promise<void>)([1, 2, 3], 2, stage, replace, cleanup))
+      .rejects.toThrow('replacement RPC failed')
+
+    expect(stage).toHaveBeenCalledTimes(2)
+    expect(cleanup).toHaveBeenCalledTimes(1)
   })
 
   it('모든 스테이징 배치가 끝난 뒤 한 번만 교체하고 배치 크기를 지킨다', async () => {
@@ -72,5 +90,25 @@ describe('포켓몬 선택 필터 게시', () => {
 
     expect(staged).toEqual([[1, 2], [3, 4], [5]])
     expect(replace).toHaveBeenCalledTimes(1)
+  })
+
+  it('반복 게시 시도는 각자 성공적으로 교체하고 실패하지 않은 시도의 스테이징을 지우지 않는다', async () => {
+    const stagedAttempts: string[][] = []
+    const replacedAttempts: string[] = []
+    const cleanup = vi.fn().mockResolvedValue(undefined)
+    const attempt = async (rows: string[]) => {
+      await (stageThenReplacePublicationRows as unknown as (
+        rows: string[], size: number, stage: (batch: string[]) => Promise<void>, replace: () => Promise<void>, cleanup: () => Promise<void>,
+      ) => Promise<void>)(rows, 2, async (batch) => { stagedAttempts.push(batch) }, async () => {
+        replacedAttempts.push(rows[0])
+      }, cleanup)
+    }
+
+    await attempt(['attempt-a:1', 'attempt-a:2'])
+    await attempt(['attempt-b:1', 'attempt-b:2'])
+
+    expect(stagedAttempts).toEqual([['attempt-a:1', 'attempt-a:2'], ['attempt-b:1', 'attempt-b:2']])
+    expect(replacedAttempts).toEqual(['attempt-a:1', 'attempt-b:1'])
+    expect(cleanup).not.toHaveBeenCalled()
   })
 })
