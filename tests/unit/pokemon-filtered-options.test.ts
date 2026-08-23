@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   damageClassLabelKo,
@@ -7,7 +7,9 @@ import {
   groupMoveOptions,
   learnMethodLabelKo,
   listPokemonFilteredOptions,
+  updateOwnedPokemonQuick,
 } from '@/features/owned-pokemon/repository'
+import { createRegistrationDraft } from '@/features/owned-pokemon/registration-state'
 import type { Database } from '@/types/database.generated'
 
 describe('포켓몬 필터 표시 라벨', () => {
@@ -153,8 +155,13 @@ describe('종별 기술 선택지', () => {
 describe('필터 저장소 요청 순서', () => {
   it('독립적인 폼과 종별 기술 요청을 둘 다 소비한 뒤 어느 하나를 해결한다', async () => {
     const events: string[] = []
+    const filters: Array<[string, string, unknown]> = []
     const consumedIndependent = new Set<string>()
     const payloads: Record<string, unknown> = {
+      data_publications: {
+        data: { id: 'active-publication' },
+        error: null,
+      },
       reference_forms: {
         data: { id: 'exact', species_id: 'species', base_form_id: 'base' },
         error: null,
@@ -195,7 +202,10 @@ describe('필터 저장소 요청 순서', () => {
     function lazyQuery(table: string) {
       const query = {
         select() { return query },
-        eq() { return query },
+        eq(column: string, value: unknown) {
+          filters.push([table, column, value])
+          return query
+        },
         maybeSingle() { return query },
         in() { return query },
         then(
@@ -231,14 +241,46 @@ describe('필터 저장소 요청 순서', () => {
 
     const result = await listPokemonFilteredOptions(client, 'species', 'exact')
 
-    const firstResolution = events.findIndex((event) => event.startsWith('resolve:'))
-    expect(events.slice(0, firstResolution)).toEqual([
+    const formResolution = events.findIndex((event) => event === 'resolve:reference_forms')
+    expect(events.slice(2, formResolution)).toEqual([
       'consume:reference_forms',
       'consume:reference_move_learnsets',
     ])
+    expect(events.slice(0, 2)).toEqual([
+      'consume:data_publications',
+      'resolve:data_publications',
+    ])
+    expect(filters).toEqual(expect.arrayContaining([
+      ['data_publications', 'status', 'active'],
+      ['reference_forms', 'publication_id', 'active-publication'],
+      ['reference_move_learnsets', 'publication_id', 'active-publication'],
+      ['reference_form_abilities', 'publication_id', 'active-publication'],
+    ]))
     expect(result).toMatchObject({
       abilities: [{ id: 'ability', nameKo: '적응력' }],
       moves: [{ id: 'move', nameKo: '몸통박치기' }],
     })
+  })
+})
+
+describe('빠른 수정 저장소 경계', () => {
+  it('임의 특성을 허용하는 테이블 UPDATE 대신 권한·폼 검증 RPC만 호출한다', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: null })
+    const client = {
+      rpc,
+      from: vi.fn(() => { throw new Error('직접 테이블 UPDATE를 호출하면 안 됩니다.') }),
+    } as unknown as SupabaseClient<Database>
+
+    await updateOwnedPokemonQuick(client, 'owned-pokemon', {
+      ...createRegistrationDraft(),
+      speciesId: 'species',
+      formId: 'form',
+      abilityId: 'ability',
+    })
+
+    expect(rpc).toHaveBeenCalledWith('update_owned_pokemon_quick', expect.objectContaining({
+      p_owned_pokemon_id: 'owned-pokemon',
+      p_ability_id: 'ability',
+    }))
   })
 })

@@ -44,26 +44,24 @@ function requireIdentifierId(map: Map<string, string>, identifier: string, table
   return id
 }
 
-async function selectAll<T>(client: SupabaseClient, table: string, columns: string): Promise<T[]> {
+async function selectAll<T>(
+  client: SupabaseClient,
+  table: string,
+  columns: string,
+  publicationId: string,
+): Promise<T[]> {
   const rows: T[] = []
   for (let offset = 0; ; offset += 1000) {
-    const { data, error } = await client.from(table).select(columns).range(offset, offset + 999)
+    const { data, error } = await client
+      .from(table)
+      .select(columns)
+      .eq('publication_id', publicationId)
+      .order('id')
+      .range(offset, offset + 999)
     if (error) throw new Error(`${table} 조회 실패: ${error.message}`)
     const page = (data ?? []) as T[]
     rows.push(...page)
     if (page.length < 1000) return rows
-  }
-}
-
-async function upsertBatches(
-  client: SupabaseClient,
-  table: string,
-  rows: Record<string, unknown>[],
-  onConflict: string,
-): Promise<void> {
-  for (const batch of chunks(rows)) {
-    const { error } = await client.from(table).upsert(batch, { onConflict })
-    if (error) throw new Error(`${table} 게시 실패: ${error.message}`)
   }
 }
 
@@ -99,9 +97,17 @@ export async function stageThenReplacePublicationRows<T>(
 }
 
 export function assertOptionFilterPublicationCounts(
-  dataset: Pick<ReferenceDataset, 'moves' | 'formAbilities' | 'learnsets' | 'reportedCounts'>,
+  dataset: Pick<
+    ReferenceDataset,
+    'moves' | 'forms' | 'formAbilities' | 'learnsets' | 'reportedCounts'
+  >,
 ): void {
-  const expected = { moves: 826, formAbilities: 3055, learnsets: 116519 } as const
+  const expected = {
+    moves: 826,
+    forms: 1498,
+    formAbilities: 3055,
+    learnsets: 116519,
+  } as const
   for (const [key, count] of Object.entries(expected) as Array<[keyof typeof expected, number]>) {
     const actual = dataset[key].length
     const reported = dataset.reportedCounts[key]
@@ -109,6 +115,84 @@ export function assertOptionFilterPublicationCounts(
       throw new Error(`${key}:actual=${actual}:reported=${reported}:expected=${count}`)
     }
   }
+}
+
+function assertUniqueIdentifiers(
+  table: string,
+  rows: ReadonlyArray<{ id: string }>,
+): Set<string> {
+  const identifiers = new Set<string>()
+  for (const row of rows) {
+    if (!row.id.trim() || identifiers.has(row.id)) throw new Error(`${table}:${row.id}:id`)
+    identifiers.add(row.id)
+  }
+  return identifiers
+}
+
+function assertResolvedIdentifier(
+  knownIds: ReadonlySet<string>,
+  identifier: string | null | undefined,
+  location: string,
+): void {
+  if (identifier && !knownIds.has(identifier)) throw new Error(location)
+}
+
+export function assertOptionFilterCandidate(dataset: ReferenceDataset): void {
+  assertOptionFilterPublicationCounts(dataset)
+  assertKoreanOptionDisplayValues(dataset)
+
+  const typeIds = assertUniqueIdentifiers('types', dataset.types)
+  const speciesIds = assertUniqueIdentifiers('species', dataset.species)
+  assertUniqueIdentifiers('forms', dataset.forms)
+  const abilityIds = assertUniqueIdentifiers('abilities', dataset.abilities)
+  const moveIds = assertUniqueIdentifiers('moves', dataset.moves)
+  const formsById = new Map(dataset.forms.map((row) => [row.id, row]))
+
+  for (const species of dataset.species) {
+    assertResolvedIdentifier(typeIds, species.primaryTypeId, `species:${species.id}:primaryTypeId`)
+    assertResolvedIdentifier(typeIds, species.secondaryTypeId, `species:${species.id}:secondaryTypeId`)
+  }
+  for (const form of dataset.forms) {
+    assertResolvedIdentifier(speciesIds, form.speciesId, `forms:${form.id}:speciesId`)
+    assertResolvedIdentifier(typeIds, form.primaryTypeId, `forms:${form.id}:primaryTypeId`)
+    assertResolvedIdentifier(typeIds, form.secondaryTypeId, `forms:${form.id}:secondaryTypeId`)
+    if (form.baseFormId) {
+      const baseForm = formsById.get(form.baseFormId)
+      if (!baseForm || baseForm.speciesId !== form.speciesId) {
+        throw new Error(`forms:${form.id}:baseFormId`)
+      }
+    }
+  }
+  for (const move of dataset.moves) {
+    assertResolvedIdentifier(typeIds, move.typeId, `moves:${move.id}:typeId`)
+  }
+  dataset.formAbilities.forEach((row, index) => {
+    const form = formsById.get(row.formId)
+    if (!form) throw new Error(`formAbilities:${index}:formId`)
+    if (!speciesIds.has(row.speciesId) || form.speciesId !== row.speciesId) {
+      throw new Error(`formAbilities:${index}:speciesId`)
+    }
+    if (!abilityIds.has(row.abilityId)) throw new Error(`formAbilities:${index}:abilityId`)
+  })
+  dataset.learnsets.forEach((row, index) => {
+    const conditionKo = row.conditionKo
+    if (
+      typeof conditionKo !== 'string'
+      || !conditionKo.trim()
+      || conditionKo !== conditionKo.trim()
+      || !hangulPattern.test(conditionKo)
+    ) {
+      throw new Error(`learnsets:${index}:conditionKo`)
+    }
+    if (!speciesIds.has(row.speciesId)) throw new Error(`learnsets:${index}:speciesId`)
+    if (!moveIds.has(row.moveId)) throw new Error(`learnsets:${index}:moveId`)
+    if (row.formId) {
+      const form = formsById.get(row.formId)
+      if (!form || form.speciesId !== row.speciesId) {
+        throw new Error(`learnsets:${index}:formId`)
+      }
+    }
+  })
 }
 
 export function assertKoreanOptionDisplayValues(
@@ -135,49 +219,42 @@ export function assertKoreanOptionDisplayValues(
 export async function publishPokemonOptionFilterReferenceData(
   dataset: ReferenceDataset,
   client: SupabaseClient,
-): Promise<{ moves: number; formAbilities: number; learnsets: number }> {
-  assertOptionFilterPublicationCounts(dataset)
-  assertKoreanOptionDisplayValues(dataset)
+): Promise<{ moves: number; forms: number; formAbilities: number; learnsets: number }> {
+  assertOptionFilterCandidate(dataset)
 
   const { data: publication, error: publicationError } = await client
     .from('data_publications')
     .select('id')
     .eq('version', dataset.version)
+    .eq('status', 'active')
     .maybeSingle()
   if (publicationError) throw new Error(`게시 버전 조회 실패: ${publicationError.message}`)
   if (!publication) throw new Error(`핵심 기준데이터 게시본이 없습니다: ${dataset.version}`)
 
   const publicationId = publication.id as string
   const [types, species, forms, abilities] = await Promise.all([
-    selectAll<IdentifierRow>(client, 'reference_types', 'id,identifier'),
-    selectAll<IdentifierRow>(client, 'reference_species', 'id,identifier'),
+    selectAll<IdentifierRow>(client, 'reference_types', 'id,identifier', publicationId),
+    selectAll<IdentifierRow>(client, 'reference_species', 'id,identifier', publicationId),
     selectAll<FormRow>(
       client,
       'reference_forms',
       'id,identifier,publication_id,species_id,name_ko,primary_type_id,secondary_type_id,is_default,is_active',
+      publicationId,
     ),
-    selectAll<IdentifierRow>(client, 'reference_abilities', 'id,identifier'),
+    selectAll<IdentifierRow>(client, 'reference_abilities', 'id,identifier', publicationId),
   ])
 
   const typeIds = new Map(types.map((row) => [row.identifier, row.id]))
   const speciesIds = new Map(species.map((row) => [row.identifier, row.id]))
   const formIds = new Map(forms.map((row) => [row.identifier, row.id]))
   const abilityIds = new Map(abilities.map((row) => [row.identifier, row.id]))
-  const sourceMoveIds = new Set(dataset.moves.map((row) => row.id))
+  const databaseForms = new Map(forms.map((row) => [row.identifier, row]))
 
   const formBaseLinks = dataset.forms.map((source) => {
-    const form = forms.find((row) => row.identifier === source.id)
+    const form = databaseForms.get(source.id)
     if (!form) throw new Error(`reference_forms 식별자를 찾을 수 없습니다: ${source.id}`)
     return {
-      id: form.id,
-      publication_id: form.publication_id,
-      species_id: form.species_id,
-      identifier: form.identifier,
-      name_ko: form.name_ko,
-      primary_type_id: form.primary_type_id,
-      secondary_type_id: form.secondary_type_id,
-      is_default: form.is_default,
-      is_active: form.is_active,
+      form_id: form.id,
       base_form_id: source.baseFormId
         ? requireIdentifierId(formIds, source.baseFormId, 'reference_forms')
         : null,
@@ -190,23 +267,16 @@ export async function publishPokemonOptionFilterReferenceData(
     slot: row.slot,
     is_hidden: row.isHidden,
   }))
-  const learnsetReferences = dataset.learnsets.map((row) => {
-    if (!sourceMoveIds.has(row.moveId)) {
-      throw new Error(`reference_moves 식별자를 찾을 수 없습니다: ${row.moveId}`)
-    }
-    return {
-      publication_id: publicationId,
+  const learnsets = dataset.learnsets.map((row) => ({
       species_id: requireIdentifierId(speciesIds, row.speciesId, 'reference_species'),
       form_id: row.formId ? requireIdentifierId(formIds, row.formId, 'reference_forms') : null,
-      moveIdentifier: row.moveId,
+      move_identifier: row.moveId,
       learn_method: row.learnMethod,
       learn_level: row.learnLevel,
       condition_ko: row.conditionKo,
-    }
-  })
+  }))
 
   const moves = dataset.moves.map((row) => ({
-    publication_id: publicationId,
     identifier: row.id,
     name_ko: row.nameKo,
     description_ko: row.descriptionKo,
@@ -217,17 +287,22 @@ export async function publishPokemonOptionFilterReferenceData(
     pp: row.pp,
     is_active: true,
   }))
-  await upsertBatches(client, 'reference_moves', moves, 'identifier')
-
-  const databaseMoves = await selectAll<IdentifierRow>(client, 'reference_moves', 'id,identifier')
-  const moveIds = new Map(databaseMoves.map((row) => [row.identifier, row.id]))
-  await upsertBatches(client, 'reference_forms', formBaseLinks, 'id')
-  const learnsets = learnsetReferences.map(({ moveIdentifier, ...row }) => ({
-    ...row,
-    move_id: requireIdentifierId(moveIds, moveIdentifier, 'reference_moves'),
-  }))
   const batchId = randomUUID()
   const stagedRows = [
+    ...moves.map((row, sourceOrder) => ({
+      batch_id: batchId,
+      publication_id: publicationId,
+      row_kind: 'move',
+      source_order: sourceOrder,
+      payload: row,
+    })),
+    ...formBaseLinks.map((row, sourceOrder) => ({
+      batch_id: batchId,
+      publication_id: publicationId,
+      row_kind: 'form_base_link',
+      source_order: sourceOrder,
+      payload: row,
+    })),
     ...formAbilities.map((row, sourceOrder) => ({
       batch_id: batchId,
       publication_id: publicationId,
@@ -265,7 +340,12 @@ export async function publishPokemonOptionFilterReferenceData(
     cleanupStagedAttempt,
   )
 
-  return { moves: moves.length, formAbilities: formAbilities.length, learnsets: learnsets.length }
+  return {
+    moves: moves.length,
+    forms: formBaseLinks.length,
+    formAbilities: formAbilities.length,
+    learnsets: learnsets.length,
+  }
 }
 
 async function main(): Promise<void> {

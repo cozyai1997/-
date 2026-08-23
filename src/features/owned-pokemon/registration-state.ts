@@ -100,6 +100,32 @@ export function reconcileFormSelection(
   }
 }
 
+export function reconcileFilteredSelections(
+  draft: RegistrationDraft,
+  options: {
+    abilities: ReadonlyArray<{ id: string }>
+    moves: ReadonlyArray<{
+      id: string
+      routes: ReadonlyArray<{ conditionKo: string }>
+    }>
+  },
+): RegistrationDraft {
+  const allowedAbilityIds = new Set(options.abilities.map((ability) => ability.id))
+  const movesById = new Map(options.moves.map((move) => [move.id, move]))
+  return {
+    ...draft,
+    abilityId: draft.abilityId && allowedAbilityIds.has(draft.abilityId)
+      ? draft.abilityId
+      : null,
+    currentMoves: draft.currentMoves.filter((move) => movesById.has(move.moveId)),
+    targetMoves: draft.targetMoves.filter((selected) => (
+      movesById.get(selected.moveId)?.routes.some(
+        (route) => route.conditionKo === selected.conditionKo,
+      ) ?? false
+    )),
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

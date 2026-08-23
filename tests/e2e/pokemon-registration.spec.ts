@@ -9,6 +9,7 @@ let userId = ''
 let nationalDexNumber = 0
 let targetNationalDexNumber = 0
 let publicationId = ''
+let previousActivePublicationId = ''
 let typeId = ''
 let speciesId = ''
 let formId = ''
@@ -41,9 +42,29 @@ test.describe.serial('보유 포켓몬 등록', () => {
     if (created.error) throw created.error
     userId = created.data.user.id
 
+    const previousActive = await admin
+      .from('data_publications')
+      .select('id')
+      .eq('status', 'active')
+      .maybeSingle()
+    if (previousActive.error) throw previousActive.error
+    previousActivePublicationId = previousActive.data?.id ?? ''
+    if (previousActivePublicationId) {
+      const retired = await admin
+        .from('data_publications')
+        .update({ status: 'retired' })
+        .eq('id', previousActivePublicationId)
+      if (retired.error) throw retired.error
+    }
+
     const publication = await admin
       .from('data_publications')
-      .insert({ version: `registration-e2e-${suffix}` })
+      .insert({
+        version: `registration-e2e-${suffix}`,
+        status: 'active',
+        validated_at: new Date().toISOString(),
+        activated_at: new Date().toISOString(),
+      })
       .select('id')
       .single()
     if (publication.error) throw publication.error
@@ -80,6 +101,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     const species = await admin
       .from('reference_species')
       .insert({
+        publication_id: publicationId,
         identifier: `vaporeon-${suffix}`,
         national_dex_number: nationalDexNumber,
         name_ko: '샤미드',
@@ -93,6 +115,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     const form = await admin
       .from('reference_forms')
       .insert({
+        publication_id: publicationId,
         identifier: `vaporeon-default-${suffix}`,
         species_id: speciesId,
         name_ko: '기본 모습',
@@ -106,6 +129,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     const alternateForm = await admin
       .from('reference_forms')
       .insert({
+        publication_id: publicationId,
         identifier: `vaporeon-wave-${suffix}`,
         species_id: speciesId,
         base_form_id: formId,
@@ -120,6 +144,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     const targetSpecies = await admin
       .from('reference_species')
       .insert({
+        publication_id: publicationId,
         identifier: `jolteon-${suffix}`,
         national_dex_number: targetNationalDexNumber,
         name_ko: '쥬피썬',
@@ -133,6 +158,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     const targetForm = await admin
       .from('reference_forms')
       .insert({
+        publication_id: publicationId,
         identifier: `jolteon-default-${suffix}`,
         species_id: targetSpeciesId,
         name_ko: '기본 모습',
@@ -146,6 +172,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     const evolutionRule = await admin
       .from('reference_evolution_rules')
       .insert({
+        publication_id: publicationId,
         from_form_id: formId,
         to_form_id: targetFormId,
         condition_ko: '천둥의돌을 사용한다',
@@ -157,7 +184,11 @@ test.describe.serial('보유 포켓몬 등록', () => {
 
     const nature = await admin
       .from('reference_natures')
-      .insert({ identifier: `jolly-${suffix}`, name_ko: '명랑' })
+      .insert({
+        publication_id: publicationId,
+        identifier: `jolly-${suffix}`,
+        name_ko: '명랑',
+      })
       .select('id')
       .single()
     if (nature.error) throw nature.error
@@ -166,6 +197,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     const ability = await admin
       .from('reference_abilities')
       .insert({
+        publication_id: publicationId,
         identifier: `water-absorb-${suffix}`,
         name_ko: '저수',
         description_ko: '물 타입 기술을 받으면 회복한다.',
@@ -178,6 +210,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     const disallowedAbility = await admin
       .from('reference_abilities')
       .insert({
+        publication_id: publicationId,
         identifier: `hydration-${suffix}`,
         name_ko: '촉촉바디',
         description_ko: '비가 오면 상태 이상을 회복한다.',
@@ -209,6 +242,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
       .from('reference_moves')
       .insert([
         {
+          publication_id: publicationId,
           identifier: `surf-${suffix}`,
           name_ko: '파도타기',
           description_ko: '큰 파도로 상대를 공격한다.',
@@ -219,6 +253,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
           pp: 15,
         },
         {
+          publication_id: publicationId,
           identifier: `ice-beam-${suffix}`,
           name_ko: '냉동빔',
           description_ko: '차가운 광선으로 상대를 공격한다.',
@@ -229,6 +264,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
           pp: 10,
         },
         {
+          publication_id: publicationId,
           identifier: `thunderbolt-${suffix}`,
           name_ko: '십만볼트',
           description_ko: '강한 전기를 발사한다.',
@@ -293,6 +329,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     const item = await admin
       .from('reference_items')
       .insert({
+        publication_id: publicationId,
         identifier: `mystic-water-${suffix}`,
         name_ko: '신비의물방울',
         description_ko: '물 타입 기술의 위력을 높인다.',
@@ -313,6 +350,14 @@ test.describe.serial('보유 포켓몬 등록', () => {
       cleanupStep('인증 사용자 삭제', Boolean(userId), () => admin.auth.admin.deleteUser(userId)),
       cleanupStep('감사 이벤트 삭제', Boolean(userId), () => (
         admin.from('audit_events').delete().eq('user_id', userId)
+      )),
+      cleanupStep('시험 게시본 은퇴', Boolean(publicationId), () => (
+        admin.from('data_publications').update({ status: 'retired' }).eq('id', publicationId)
+      )),
+      cleanupStep('기존 게시본 복구', Boolean(previousActivePublicationId), () => (
+        admin.from('data_publications')
+          .update({ status: 'active' })
+          .eq('id', previousActivePublicationId)
       )),
       cleanupStep('진화 규칙 삭제', Boolean(evolutionRuleId), () => (
         admin.from('reference_evolution_rules').delete().eq('id', evolutionRuleId)
@@ -452,6 +497,14 @@ test.describe.serial('보유 포켓몬 등록', () => {
           .eq('id', publicationId)
         return { error: result.error, residue: result.count ?? 0 }
       }),
+      residueStep('기존 active 게시본 미복구', Boolean(previousActivePublicationId), async () => {
+        const result = await admin
+          .from('data_publications')
+          .select('id', { count: 'exact', head: true })
+          .eq('id', previousActivePublicationId)
+          .eq('status', 'active')
+        return { error: result.error, residue: result.count === 1 ? 0 : 1 }
+      }),
     ]
     await runCleanupSteps(cleanupSteps)
   })
@@ -517,6 +570,8 @@ test.describe.serial('보유 포켓몬 등록', () => {
     )
     expect(page.url()).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i)
     await expect(page.getByText('천둥의돌을 사용한다')).toBeVisible()
+    await expect(page.getByRole('option', { name: '저수 · 숨겨진 특성' })).toBeAttached()
+    await expect(page.getByRole('option', { name: '촉촉바디' })).toHaveCount(0)
 
     await page.getByLabel('빠른 수정 레벨').fill('61')
     await page.getByLabel('메모').fill('특수공격 중심 육성')
@@ -524,6 +579,50 @@ test.describe.serial('보유 포켓몬 등록', () => {
     await expect(page.getByText('Lv. 61')).toBeVisible()
     await expect(page.getByRole('paragraph').filter({ hasText: '특수공격 중심 육성' })).toBeVisible()
 
+    await page.getByRole('button', { name: '보호 정보 정정 열기' }).click()
+    await page.getByLabel('정정 모습').selectOption({ label: '물결 모습' })
+    await page.getByLabel('정정 사유').fill('잘못 입력한 모습 정보를 정정함')
+    page.once('dialog', (dialog) => dialog.accept())
+    await page.getByRole('button', { name: '정정 저장' }).click()
+    await expect(page).toHaveURL(/\/my-pokemon$/)
+
+    const formCorrected = await admin
+      .from('owned_pokemon')
+      .select('id,form_id,ability_id')
+      .eq('user_id', userId)
+      .eq('nickname', '파도')
+      .single()
+    if (formCorrected.error) throw formCorrected.error
+    const retainedMoves = await admin
+      .from('owned_pokemon_moves')
+      .select('move_id,kind,slot,target_condition_ko')
+      .eq('owned_pokemon_id', formCorrected.data.id)
+      .order('kind')
+      .order('slot')
+    if (retainedMoves.error) throw retainedMoves.error
+    const formAudit = await admin
+      .from('audit_events')
+      .select('before_data,after_data,reason_ko')
+      .eq('entity_id', formCorrected.data.id)
+      .eq('action', 'correct')
+      .single()
+    if (formAudit.error) throw formAudit.error
+
+    expect(formCorrected.data).toMatchObject({ form_id: alternateFormId, ability_id: null })
+    expect(retainedMoves.data).toHaveLength(4)
+    expect(formAudit.data).toMatchObject({
+      reason_ko: '잘못 입력한 모습 정보를 정정함',
+      before_data: {
+        dependent_state: { ability_id: abilityId, moves: expect.any(Array) },
+      },
+      after_data: {
+        dependent_state: { ability_id: null, moves: expect.any(Array) },
+      },
+    })
+    expect((formAudit.data.after_data as { dependent_state?: { moves?: unknown[] } })
+      .dependent_state?.moves).toHaveLength(4)
+
+    await page.getByRole('link', { name: /파도 상세 보기/ }).click()
     await page.getByRole('button', { name: '보호 정보 정정 열기' }).click()
     await page.getByLabel('정정 포켓몬 종').selectOption({
       label: `쥬피썬 · 도감번호 #${formatDex(targetNationalDexNumber)}`,
@@ -537,22 +636,43 @@ test.describe.serial('보유 포켓몬 등록', () => {
 
     const owned = await admin
       .from('owned_pokemon')
-      .select('id')
+      .select('id,species_id,form_id,ability_id')
       .eq('user_id', userId)
-      .order('created_at')
-      .limit(1)
+      .eq('nickname', '파도')
       .single()
     if (owned.error) throw owned.error
-    const audit = await admin
+    const clearedMoves = await admin
+      .from('owned_pokemon_moves')
+      .select('id')
+      .eq('owned_pokemon_id', owned.data.id)
+    if (clearedMoves.error) throw clearedMoves.error
+    const audits = await admin
       .from('audit_events')
       .select('action, reason_ko, before_data, after_data')
       .eq('entity_id', owned.data.id)
       .eq('action', 'correct')
-      .single()
-    if (audit.error) throw audit.error
-    expect(audit.data.reason_ko).toBe('종과 초기 포획일 입력 오류 정정')
-    expect(audit.data.before_data).toMatchObject({ captured_on: null, species_id: speciesId })
-    expect(audit.data.after_data).toMatchObject({ captured_on: '2026-08-17', species_id: targetSpeciesId })
+      .order('id')
+    if (audits.error) throw audits.error
+    expect(owned.data).toMatchObject({
+      species_id: targetSpeciesId,
+      form_id: targetFormId,
+      ability_id: null,
+    })
+    expect(clearedMoves.data).toEqual([])
+    expect(audits.data).toHaveLength(2)
+    expect(audits.data[1]).toMatchObject({
+      reason_ko: '종과 초기 포획일 입력 오류 정정',
+      before_data: {
+        captured_on: null,
+        species_id: speciesId,
+        dependent_state: { ability_id: null, moves: expect.any(Array) },
+      },
+      after_data: {
+        captured_on: '2026-08-17',
+        species_id: targetSpeciesId,
+        dependent_state: { ability_id: null, moves: [] },
+      },
+    })
   })
 })
 

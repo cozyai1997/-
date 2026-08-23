@@ -151,6 +151,24 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
   })
 
   it('다른 사용자의 행을 수정하거나 삭제하지 못한다', async () => {
+    const quickUpdated = await bob.client.rpc('update_owned_pokemon_quick', {
+      p_owned_pokemon_id: pokemonId,
+      p_nickname: '가로챈 이브이',
+      p_gender: 'female',
+      p_level: 20,
+      p_effective_nature_id: null,
+      p_ability_id: null,
+      p_effective_iv: {
+        hp: 0, attack: 0, defense: 0,
+        special_attack: 0, special_defense: 0, speed: 0,
+      },
+      p_ev: {
+        hp: 0, attack: 0, defense: 0,
+        special_attack: 0, special_defense: 0, speed: 0,
+      },
+      p_held_item_id: null,
+      p_notes: '',
+    })
     const corrected = await bob.client.rpc('correct_owned_pokemon', {
       p_owned_pokemon_id: pokemonId,
       p_species_id: speciesId,
@@ -173,6 +191,7 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
       .select('id')
     const deleted = await bob.client.from('owned_pokemon').delete().eq('id', pokemonId).select('id')
 
+    expect(quickUpdated.error?.code).toBe('42501')
     expect(corrected.error?.code).toBe('42501')
     expect(updated.error).toBeNull()
     expect(updated.data).toEqual([])

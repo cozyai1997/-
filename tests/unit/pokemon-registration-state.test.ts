@@ -7,6 +7,7 @@ import {
   reconcileSpeciesSelection,
   registrationDraftKey,
 } from '@/features/owned-pokemon/registration-state'
+import * as registrationState from '@/features/owned-pokemon/registration-state'
 
 function storageWith(values: Record<string, string>): Pick<Storage, 'getItem'> {
   return {
@@ -157,6 +158,43 @@ describe('종·모습 선택 정합성', () => {
       abilityId: null,
       currentMoves: [{ moveId: 'current' }],
       targetMoves: [{ moveId: 'target', conditionKo: '특별한 방법으로 습득' }],
+    })
+  })
+
+  it('복원된 v2 초안에서 허용되지 않은 기술과 정확히 일치하지 않는 목표 경로를 제거한다', () => {
+    const draft = {
+      ...createRegistrationDraft(),
+      speciesId: 'species',
+      formId: 'form',
+      abilityId: 'allowed-ability',
+      currentMoves: [
+        { moveId: 'allowed-move' },
+        { moveId: 'invalid-move' },
+      ],
+      targetMoves: [
+        { moveId: 'allowed-move', conditionKo: '레벨 5에 습득' },
+        { moveId: 'route-mismatch', conditionKo: '조작한 습득 조건' },
+        { moveId: 'invalid-move', conditionKo: '유전으로 습득' },
+      ],
+    }
+    const options = {
+      abilities: [{ id: 'allowed-ability' }],
+      moves: [
+        { id: 'allowed-move', routes: [{ conditionKo: '레벨 5에 습득' }] },
+        { id: 'route-mismatch', routes: [{ conditionKo: '기술머신 1로 습득' }] },
+      ],
+    }
+    const reconcile = 'reconcileFilteredSelections' in registrationState
+      ? registrationState.reconcileFilteredSelections as unknown as (
+        value: typeof draft,
+        loaded: typeof options,
+      ) => typeof draft
+      : (value: typeof draft) => value
+
+    expect(reconcile(draft, options)).toMatchObject({
+      abilityId: 'allowed-ability',
+      currentMoves: [{ moveId: 'allowed-move' }],
+      targetMoves: [{ moveId: 'allowed-move', conditionKo: '레벨 5에 습득' }],
     })
   })
 })

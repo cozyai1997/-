@@ -208,11 +208,22 @@ export async function listPokemonFilteredOptions(
   speciesId: string,
   formId: string,
 ): Promise<PokemonFilteredOptions> {
+  const publicationResult = await client
+    .from('data_publications')
+    .select('id')
+    .eq('status', 'active')
+    .maybeSingle()
+  if (publicationResult.error) throw publicationResult.error
+  if (!publicationResult.data) throw new Error('활성 기준데이터 게시본이 없습니다.')
+  const publicationId = publicationResult.data.id
+
   const formRequest = client
     .from('reference_forms')
     .select('id, species_id, base_form_id')
     .eq('id', formId)
     .eq('species_id', speciesId)
+    .eq('publication_id', publicationId)
+    .eq('is_active', true)
     .maybeSingle()
   const learnsetRequest = client
     .from('reference_move_learnsets')
@@ -225,6 +236,9 @@ export async function listPokemonFilteredOptions(
       )
     `)
     .eq('species_id', speciesId)
+    .eq('publication_id', publicationId)
+    .eq('reference_moves.publication_id', publicationId)
+    .eq('reference_moves.is_active', true)
 
   const [formResult, learnsetResult] = await Promise.all([formRequest, learnsetRequest])
   if (formResult.error) throw formResult.error
@@ -242,6 +256,9 @@ export async function listPokemonFilteredOptions(
       reference_abilities!inner(id, name_ko, description_ko, is_active)
     `)
     .in('form_id', formIds)
+    .eq('publication_id', publicationId)
+    .eq('reference_abilities.publication_id', publicationId)
+    .eq('reference_abilities.is_active', true)
   const abilityResult = await abilityRequest
   if (abilityResult.error) throw abilityResult.error
 
@@ -482,20 +499,18 @@ export async function updateOwnedPokemonQuick(
   pokemonId: string,
   input: OwnedPokemonInput,
 ) {
-  const { error } = await client
-    .from('owned_pokemon')
-    .update({
-      nickname: input.nickname,
-      gender: input.gender,
-      level: input.level,
-      effective_nature_id: input.effectiveNatureId,
-      ability_id: input.abilityId,
-      effective_iv: input.effectiveIv,
-      ev: input.ev,
-      held_item_id: input.heldItemId,
-      notes: input.notes,
-    })
-    .eq('id', pokemonId)
+  const { error } = await client.rpc('update_owned_pokemon_quick', {
+    p_owned_pokemon_id: pokemonId,
+    p_nickname: input.nickname as unknown as string,
+    p_gender: input.gender,
+    p_level: input.level,
+    p_effective_nature_id: input.effectiveNatureId as unknown as string,
+    p_ability_id: input.abilityId as unknown as string,
+    p_effective_iv: input.effectiveIv,
+    p_ev: input.ev,
+    p_held_item_id: input.heldItemId as unknown as string,
+    p_notes: input.notes,
+  })
   if (error) throw error
 }
 

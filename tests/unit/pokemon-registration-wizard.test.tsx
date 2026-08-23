@@ -277,6 +277,43 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     expect(submit).toBeDisabled()
   })
 
+  it('복원한 v2 초안을 필터 결과와 맞춘 뒤 유효한 기술과 경로만 새로고침까지 유지한다', async () => {
+    sessionStorage.setItem(registrationDraftKey, JSON.stringify({
+      ...createRegistrationDraft(),
+      step: 6,
+      speciesId: 'species-water',
+      formId: 'form-water',
+      abilityId: 'ability-water',
+      currentMoves: [
+        { moveId: 'move-surf' },
+        { moveId: 'move-invalid' },
+      ],
+      targetMoves: [
+        { moveId: 'move-surf', conditionKo: '기술머신 123으로 습득' },
+        { moveId: 'move-ice-beam', conditionKo: '조작한 습득 조건' },
+      ],
+    }))
+    const view = render(<PokemonRegistrationWizard />)
+
+    await waitFor(() => {
+      expect(JSON.parse(sessionStorage.getItem(registrationDraftKey) ?? '{}')).toMatchObject({
+        currentMoves: [{ moveId: 'move-surf' }],
+        targetMoves: [{ moveId: 'move-surf', conditionKo: '기술머신 123으로 습득' }],
+      })
+    })
+    expect(screen.getByLabelText('현재 기술 1')).toHaveValue('move-surf')
+    expect(screen.getByLabelText('현재 기술 2')).toHaveValue('')
+    expect(screen.getByLabelText('목표 기술 1')).toHaveValue('move-surf')
+    expect(screen.getByLabelText('목표 기술 2')).toHaveValue('')
+
+    view.unmount()
+    render(<PokemonRegistrationWizard />)
+    await waitFor(() => {
+      expect(screen.getByLabelText('현재 기술 1')).toHaveValue('move-surf')
+      expect(screen.getByLabelText('목표 기술 1')).toHaveValue('move-surf')
+    })
+  })
+
   it('폼 변경은 종별 기술을 유지하면서 허용되지 않는 특성을 지운다', async () => {
     const user = userEvent.setup()
     render(<PokemonRegistrationWizard />)

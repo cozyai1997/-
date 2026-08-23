@@ -15,7 +15,7 @@ import {
 import {
   createRegistrationDraft,
   readRegistrationDraft,
-  reconcileFormSelection,
+  reconcileFilteredSelections,
   reconcileSpeciesSelection,
   registrationDraftKey,
   type RegistrationDraft,
@@ -182,7 +182,6 @@ export function PokemonRegistrationWizard() {
   const loadFilteredOptions = useCallback(async (
     speciesId: string,
     formId: string,
-    reconcileAbility: boolean,
   ) => {
     const version = ++requestVersion.current
     if (!speciesId || !formId) {
@@ -198,12 +197,9 @@ export function PokemonRegistrationWizard() {
         createClient(), speciesId, formId,
       )
       if (!mounted.current || requestVersion.current !== version) return
-      if (reconcileAbility) {
-        const allowedAbilityIds = new Set(loadedOptions.abilities.map((ability) => ability.id))
-        setDraft((current) => current.speciesId === speciesId && current.formId === formId
-          ? reconcileFormSelection(current, formId, allowedAbilityIds)
-          : current)
-      }
+      setDraft((current) => current.speciesId === speciesId && current.formId === formId
+        ? reconcileFilteredSelections(current, loadedOptions)
+        : current)
       setFilteredOptions(loadedOptions)
       setFilterStatus('loaded')
     } catch {
@@ -220,7 +216,7 @@ export function PokemonRegistrationWizard() {
     queueMicrotask(() => {
       if (!active) return
       setDraft(restoredDraft)
-      void loadFilteredOptions(restoredDraft.speciesId, restoredDraft.formId, true)
+      void loadFilteredOptions(restoredDraft.speciesId, restoredDraft.formId)
     })
     listOwnedPokemonEditOptions(createClient())
       .then((loadedOptions) => {
@@ -252,13 +248,13 @@ export function PokemonRegistrationWizard() {
     const form = option?.forms.find((item) => item.isDefault) ?? option?.forms[0]
     const formId = form?.id ?? ''
     setDraft((current) => reconcileSpeciesSelection(current, speciesId, formId))
-    void loadFilteredOptions(speciesId, formId, false)
+    void loadFilteredOptions(speciesId, formId)
   }
 
   function chooseForm(formId: string) {
     const speciesId = draft.speciesId
     setDraft((current) => ({ ...current, formId }))
-    void loadFilteredOptions(speciesId, formId, true)
+    void loadFilteredOptions(speciesId, formId)
   }
 
   function chooseCurrentMove(slot: number, moveId: string) {

@@ -2,11 +2,13 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { PrivatePokemonImage } from '@/components/pokemon/private-pokemon-image'
 import {
   correctOwnedPokemon,
+  listPokemonFilteredOptions,
+  type AbilityOption,
   type OwnedPokemonDetail,
   type OwnedPokemonEditOptions,
   updateOwnedPokemonQuick,
@@ -30,6 +32,8 @@ type PokemonDetailEditorProps = {
   entry: number
 }
 
+type FilterStatus = 'idle' | 'loading' | 'loaded' | 'error'
+
 export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: PokemonDetailEditorProps) {
   const router = useRouter()
   const [pokemon, setPokemon] = useState(initialPokemon)
@@ -40,12 +44,86 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
   const [message, setMessage] = useState('')
   const [pending, setPending] = useState(false)
   const [imageRevision, setImageRevision] = useState(0)
+  const [quickFilter, setQuickFilter] = useState<{
+    key: string
+    status: FilterStatus
+    abilities: AbilityOption[]
+  }>({ key: '', status: 'idle', abilities: [] })
+  const [correctionFilterStatus, setCorrectionFilterStatus] = useState<FilterStatus>('idle')
+  const quickRequestVersion = useRef(0)
+  const correctionRequestVersion = useRef(0)
+  const mounted = useRef(true)
   const correctionSpecies = useMemo(
     () => options.species.find((item) => item.id === correction.speciesId),
     [correction.speciesId, options.species],
   )
+  const quickFilterKey = `${pokemon.speciesId}\u0000${pokemon.formId}`
+  const quickFilterStatus = quickFilter.key === quickFilterKey
+    ? quickFilter.status
+    : 'loading'
+  const quickAbilities = quickFilter.key === quickFilterKey ? quickFilter.abilities : []
+  const selectedQuickAbility = quickAbilities.find((ability) => ability.id === draft.abilityId)
+
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      quickRequestVersion.current += 1
+      correctionRequestVersion.current += 1
+    }
+  }, [])
+
+  useEffect(() => {
+    const version = ++quickRequestVersion.current
+    const key = `${pokemon.speciesId}\u0000${pokemon.formId}`
+    void listPokemonFilteredOptions(createClient(), pokemon.speciesId, pokemon.formId)
+      .then((loaded) => {
+        if (!mounted.current || quickRequestVersion.current !== version) return
+        const allowedAbilityIds = new Set(loaded.abilities.map((ability) => ability.id))
+        setDraft((current) => ({
+          ...current,
+          abilityId: current.abilityId && allowedAbilityIds.has(current.abilityId)
+            ? current.abilityId
+            : null,
+        }))
+        setQuickFilter({ key, status: 'loaded', abilities: loaded.abilities })
+      })
+      .catch(() => {
+        if (!mounted.current || quickRequestVersion.current !== version) return
+        setQuickFilter({ key, status: 'error', abilities: [] })
+      })
+  }, [pokemon.formId, pokemon.speciesId])
+
+  const loadCorrectionOptions = useCallback(async (speciesId: string, formId: string) => {
+    const version = ++correctionRequestVersion.current
+    setCorrectionFilterStatus('loading')
+    try {
+      const loaded = await listPokemonFilteredOptions(createClient(), speciesId, formId)
+      if (!mounted.current || correctionRequestVersion.current !== version) return
+      const allowedAbilityIds = new Set(loaded.abilities.map((ability) => ability.id))
+      const speciesChanged = speciesId !== pokemon.speciesId
+      setCorrection((current) => {
+        if (current.speciesId !== speciesId || current.formId !== formId) return current
+        return {
+          ...current,
+          abilityId: speciesChanged
+            ? null
+            : pokemon.abilityId && allowedAbilityIds.has(pokemon.abilityId)
+              ? pokemon.abilityId
+              : null,
+          currentMoves: speciesChanged ? [] : pokemon.currentMoves,
+          targetMoves: speciesChanged ? [] : pokemon.targetMoves,
+        }
+      })
+      setCorrectionFilterStatus('loaded')
+    } catch {
+      if (!mounted.current || correctionRequestVersion.current !== version) return
+      setCorrectionFilterStatus('error')
+    }
+  }, [pokemon])
 
   async function saveQuickEdit() {
+    if (quickFilterStatus !== 'loaded') return
     const errors = validateOwnedPokemon(draft)
     if (errors.length) {
       setMessage(errors[0])
@@ -64,6 +142,7 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
   }
 
   async function saveCorrection() {
+    if (correctionFilterStatus !== 'loaded') return
     const errors = validateOwnedPokemon(correction)
     if (errors.length) {
       setMessage(errors[0])
@@ -97,11 +176,43 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
   function chooseCorrectionSpecies(speciesId: string) {
     const species = options.species.find((item) => item.id === speciesId)
     const form = species?.forms.find((item) => item.isDefault) ?? species?.forms[0]
+    const formId = form?.id ?? ''
     setCorrection((current) => ({
       ...current,
       speciesId,
-      formId: form?.id ?? '',
+      formId,
+      abilityId: speciesId === pokemon.speciesId ? pokemon.abilityId : null,
+      currentMoves: speciesId === pokemon.speciesId ? pokemon.currentMoves : [],
+      targetMoves: speciesId === pokemon.speciesId ? pokemon.targetMoves : [],
     }))
+    if (formId) void loadCorrectionOptions(speciesId, formId)
+    else setCorrectionFilterStatus('error')
+  }
+
+  function chooseCorrectionForm(formId: string) {
+    const speciesId = correction.speciesId
+    const speciesChanged = speciesId !== pokemon.speciesId
+    setCorrection((current) => ({
+      ...current,
+      formId,
+      abilityId: speciesChanged ? null : pokemon.abilityId,
+      currentMoves: speciesChanged ? [] : pokemon.currentMoves,
+      targetMoves: speciesChanged ? [] : pokemon.targetMoves,
+    }))
+    void loadCorrectionOptions(speciesId, formId)
+  }
+
+  function toggleCorrection() {
+    if (correctionOpen) {
+      correctionRequestVersion.current += 1
+      setCorrectionOpen(false)
+      setCorrectionFilterStatus('idle')
+      return
+    }
+    setCorrection(pokemon)
+    setReasonKo('')
+    setCorrectionOpen(true)
+    void loadCorrectionOptions(pokemon.speciesId, pokemon.formId)
   }
 
   async function uploadPrivateImage(file: File | undefined) {
@@ -234,9 +345,32 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
               <option value="">미지정</option>{options.natures.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
             </select>
             <label htmlFor="quick-ability">특성</label>
-            <select id="quick-ability" value={draft.abilityId ?? ''} onChange={(event) => setDraft({ ...draft, abilityId: event.target.value || null })}>
-              <option value="">미지정</option>{options.abilities.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
+            <select
+              id="quick-ability"
+              value={draft.abilityId ?? ''}
+              disabled={pending || quickFilterStatus !== 'loaded'}
+              aria-describedby={selectedQuickAbility ? 'quick-ability-description' : undefined}
+              onChange={(event) => setDraft({ ...draft, abilityId: event.target.value || null })}
+            >
+              <option value="">미지정</option>
+              {quickAbilities.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.nameKo}{item.isHidden ? ' · 숨겨진 특성' : ''}
+                </option>
+              ))}
             </select>
+            {selectedQuickAbility
+              ? <p id="quick-ability-description">{selectedQuickAbility.descriptionKo}</p>
+              : null}
+            {quickFilterStatus === 'loading'
+              ? <p role="status" aria-live="polite">빠른 수정 특성을 불러오는 중입니다.</p>
+              : null}
+            {quickFilterStatus === 'error'
+              ? <p className="form-error" role="status">빠른 수정 특성을 불러오지 못했습니다. 다시 시도해 주세요.</p>
+              : null}
+            {quickFilterStatus === 'loaded' && quickAbilities.length === 0
+              ? <p role="status" aria-live="polite">선택한 모습에 등록된 특성이 없습니다.</p>
+              : null}
             <label htmlFor="quick-item">지닌 도구</label>
             <select id="quick-item" value={draft.heldItemId ?? ''} onChange={(event) => setDraft({ ...draft, heldItemId: event.target.value || null })}>
               <option value="">없음</option>{options.items.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
@@ -260,7 +394,7 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
               </label>
             ))}
           </div>
-          <button type="button" className="primary-button" disabled={pending} onClick={saveQuickEdit}>빠른 수정 저장</button>
+          <button type="button" className="primary-button" disabled={pending || quickFilterStatus !== 'loaded'} onClick={saveQuickEdit}>빠른 수정 저장</button>
         </section>
 
         <section className="detail-panel" aria-labelledby="evolution-title">
@@ -278,7 +412,7 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
       <section className="detail-panel protected-panel" aria-labelledby="protected-title">
         <h2 id="protected-title">보호 정보</h2>
         <p>종·모습·원본 IV·포획 정보는 사유와 확인 절차를 거쳐야 정정할 수 있습니다.</p>
-        <button type="button" className="secondary-button" onClick={() => setCorrectionOpen((open) => !open)}>보호 정보 정정 열기</button>
+        <button type="button" className="secondary-button" onClick={toggleCorrection}>보호 정보 정정 열기</button>
         {correctionOpen ? (
           <div className="correction-form">
             <label htmlFor="correction-species">정정 포켓몬 종</label>
@@ -286,7 +420,7 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
               {options.species.map((item) => <option key={item.id} value={item.id}>{item.nameKo} · 도감번호 #{String(item.nationalDexNumber).padStart(4, '0')}</option>)}
             </select>
             <label htmlFor="correction-form">정정 모습</label>
-            <select id="correction-form" value={correction.formId} onChange={(event) => setCorrection({ ...correction, formId: event.target.value })}>
+            <select id="correction-form" value={correction.formId} onChange={(event) => chooseCorrectionForm(event.target.value)}>
               {(correctionSpecies?.forms ?? []).map((form) => <option key={form.id} value={form.id}>{form.nameKo}</option>)}
             </select>
             <label htmlFor="correction-captured-on">정정 포획일</label>
@@ -300,7 +434,13 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
             </div>
             <label htmlFor="correction-reason">정정 사유</label>
             <textarea id="correction-reason" value={reasonKo} minLength={5} required onChange={(event) => setReasonKo(event.target.value)} />
-            <button type="button" className="primary-button" disabled={pending} onClick={saveCorrection}>정정 저장</button>
+            {correctionFilterStatus === 'loading'
+              ? <p role="status" aria-live="polite">정정할 모습의 특성을 확인하는 중입니다.</p>
+              : null}
+            {correctionFilterStatus === 'error'
+              ? <p className="form-error" role="status">정정할 모습의 특성을 확인하지 못했습니다. 다시 선택해 주세요.</p>
+              : null}
+            <button type="button" className="primary-button" disabled={pending || correctionFilterStatus !== 'loaded'} onClick={saveCorrection}>정정 저장</button>
           </div>
         ) : null}
       </section>
