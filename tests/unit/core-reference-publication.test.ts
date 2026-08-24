@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  analyzeEvolutionPublication,
   buildCoreReferenceSql,
   prepareCoreReferenceData,
 } from '../../scripts/data/publish-core-reference-data'
@@ -96,6 +97,50 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
     expect(prepared.items).toEqual([
       expect.objectContaining({ identifier: 'water_stone', nameKo: '물의돌' }),
     ])
+  })
+
+  it('실제 메가 폼 대상은 게시하고 순수 자기 진화와 누락된 메가 대상은 구분해 제외한다', () => {
+    const candidate = structuredClone(dataset)
+    candidate.species.push(
+      { id: 'gengar', nationalDexNumber: 94, nameKo: '팬텀', descriptionKo: '그림자 포켓몬.' },
+      { id: 'milotic', nationalDexNumber: 350, nameKo: '밀로틱', descriptionKo: '사랑 포켓몬.' },
+    )
+    candidate.forms.push(
+      { ...candidate.forms[0], id: 'gengar-normal', speciesId: 'gengar', nameKo: '기본 모습' },
+      { ...candidate.forms[0], id: 'gengar-mega', speciesId: 'gengar', nameKo: '메가팬텀', isBattleOnly: true },
+      { ...candidate.forms[0], id: 'milotic-normal', speciesId: 'milotic', nameKo: '기본 모습' },
+    )
+    candidate.evolutions = [
+      { id: 'gengar>megagengar:71', fromSpeciesId: 'gengar', toSpeciesId: 'gengar', toFormId: 'gengar-mega', conditionKo: '키스톤 사용' },
+      { id: 'eevee>eevee:72', fromSpeciesId: 'eevee', toSpeciesId: 'eevee', conditionKo: '특수 조건' },
+      { id: 'milotic>megamilotic:233', fromSpeciesId: 'milotic', toSpeciesId: 'milotic', conditionKo: '키스톤 사용' },
+    ]
+    const withDiagnostics = Object.assign(candidate, {
+      sourceDiagnostics: [{
+        code: 'missing-evolution-target-form' as const,
+        table: 'evolutions' as const,
+        key: 'milotic>megamilotic:233',
+        target: 'forms:milotic-mega',
+      }],
+    })
+
+    const analysis = analyzeEvolutionPublication(withDiagnostics)
+    const prepared = prepareCoreReferenceData(withDiagnostics)
+
+    expect(analysis).toMatchObject({
+      sourceCount: 3,
+      publishableCount: 1,
+      excludedPureSameSpeciesCount: 1,
+      excludedMissingTargetCount: 1,
+      excludedInvalidCount: 0,
+    })
+    expect(analysis.missingTargetDiagnostics).toEqual(withDiagnostics.sourceDiagnostics)
+    expect(prepared.evolutions).toEqual([{
+      fromFormIdentifier: 'gengar-normal',
+      toFormIdentifier: 'gengar-mega',
+      conditionKo: '키스톤 사용',
+      sortOrder: 0,
+    }])
   })
 
   it('실패 시 일부 행이 노출되지 않도록 하나의 트랜잭션 SQL을 만든다', () => {

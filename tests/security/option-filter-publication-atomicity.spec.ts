@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 type LocalEnvironment = { API_URL: string; SERVICE_ROLE_KEY: string }
 
@@ -313,6 +313,20 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
       if (retired.error) throw retired.error
     }
     runLocalSql(setupSql())
+  })
+
+  afterEach(async () => {
+    if (!admin) return
+    const cleanup = await admin
+      .from('reference_option_filter_publication_staging')
+      .delete()
+      .in('batch_id', [
+        ids.failedBatch,
+        ids.firstSuccessfulBatch,
+        ids.secondSuccessfulBatch,
+        ids.thirdSuccessfulBatch,
+      ])
+    if (cleanup.error) throw cleanup.error
   })
 
   afterAll(async () => {

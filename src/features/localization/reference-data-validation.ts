@@ -64,11 +64,19 @@ export type BattleDatasetProfile = {
   battleOnlyDiagnostics: number
 }
 
+export type SourceDiagnostic = {
+  code: 'missing-evolution-target-form'
+  table: 'evolutions'
+  key: string
+  target: string
+}
+
 export type ReferenceDataset = {
   version: string
   sourceCommits: Record<string, string>
   sha256: Record<string, string>
   battleOnlyDiagnostics: string[]
+  sourceDiagnostics?: SourceDiagnostic[]
   reportedCounts: ExpectedRowCounts & BattleReportedCounts
   types: KoreanNamedRow[]
   species: Array<KoreanNamedRow & {
@@ -134,6 +142,9 @@ export type ValidationReport = {
   }>
   manifestIssues: string[]
   battleDataIssues: string[]
+  duplicateKeys: Array<{ table: string; key: string }>
+  placeholderIssues: Array<{ table: string; key: string; field: string; token: string }>
+  sourceDiagnostics: SourceDiagnostic[]
   sourceCommits: Record<string, string>
   sha256: Record<string, string>
 }
@@ -176,6 +187,7 @@ const nonHpStatKeys = new Set<NonHpStatKey>([
   'speed',
 ])
 const statKeys = ['hp', 'attack', 'defense', 'special_attack', 'special_defense', 'speed'] as const
+const interpolationTokenPattern = /%(?:\d+\$)?[a-zA-Z]|\{[^{}\r\n]+\}/gu
 
 function rowKey(table: KoreanFieldTable, row: Record<string, unknown>, index: number): string {
   if (typeof row.id === 'string' && row.id.trim()) return row.id
@@ -201,6 +213,24 @@ function addBrokenReference(
   }
 }
 
+function collectDuplicateKeys<T>(
+  target: ValidationReport['duplicateKeys'],
+  table: string,
+  rows: T[],
+  keyFor: (row: T, index: number) => string,
+): void {
+  const seen = new Set<string>()
+  const reported = new Set<string>()
+  rows.forEach((row, index) => {
+    const key = keyFor(row, index)
+    if (seen.has(key) && !reported.has(key)) {
+      target.push({ table, key })
+      reported.add(key)
+    }
+    seen.add(key)
+  })
+}
+
 export function validateReferenceData(
   dataset: ReferenceDataset,
   options: {
@@ -221,6 +251,9 @@ export function validateReferenceData(
   const countMismatches: ValidationReport['countMismatches'] = []
   const manifestIssues: string[] = []
   const battleDataIssues: string[] = []
+  const duplicateKeys: ValidationReport['duplicateKeys'] = []
+  const placeholderIssues: ValidationReport['placeholderIssues'] = []
+  const sourceDiagnostics = dataset.sourceDiagnostics ?? []
 
   for (const [table, fields] of Object.entries(requiredKoreanFields) as Array<
     [KoreanFieldTable, readonly string[]]
@@ -231,10 +264,44 @@ export function validateReferenceData(
         const value = row[field]
         if (typeof value !== 'string' || !hangulPattern.test(value)) {
           missingKoreanFields.push({ table, key: rowKey(table, row, index), field })
+          continue
+        }
+        for (const token of value.match(interpolationTokenPattern) ?? []) {
+          placeholderIssues.push({ table, key: rowKey(table, row, index), field, token })
         }
       }
     })
   }
+
+  const idTables = ['types', 'species', 'forms', 'abilities', 'moves', 'items', 'natures', 'teraTypes'] as const
+  for (const table of idTables) {
+    collectDuplicateKeys(duplicateKeys, table, dataset[table], (row) => row.id)
+  }
+  collectDuplicateKeys(duplicateKeys, 'learnsets', dataset.learnsets, (row) => [
+    row.speciesId, row.formId ?? '', row.moveId, row.learnMethod,
+    row.learnLevel ?? '', row.conditionKo,
+  ].join(':'))
+  collectDuplicateKeys(
+    duplicateKeys,
+    'evolutions.id',
+    dataset.evolutions.filter((row) => typeof row.id === 'string' && row.id.length > 0),
+    (row) => row.id as string,
+  )
+  collectDuplicateKeys(duplicateKeys, 'evolutions', dataset.evolutions, (row) => [
+    row.fromSpeciesId, row.fromFormId ?? '', row.toSpeciesId, row.toFormId ?? '', row.conditionKo,
+  ].join(':'))
+  collectDuplicateKeys(duplicateKeys, 'formAbilities', dataset.formAbilities, (row) => [
+    row.formId, row.speciesId, row.abilityId, row.slot, row.isHidden,
+  ].join(':'))
+  collectDuplicateKeys(duplicateKeys, 'typeMatchups', dataset.typeMatchups, (row) => (
+    `${row.attackingTypeId}:${row.defendingTypeId}`
+  ))
+  collectDuplicateKeys(duplicateKeys, 'formTeraOptions', dataset.formTeraOptions, (row) => (
+    `${row.formId}:${row.teraTypeId}`
+  ))
+  collectDuplicateKeys(duplicateKeys, 'formGigantamaxOptions', dataset.formGigantamaxOptions, (row) => (
+    `${row.sourceFormId}:${row.gigantamaxFormId}`
+  ))
 
   for (const table of rowCountKeys) {
     const expected = expectedRowCounts[table]
@@ -390,7 +457,9 @@ export function validateReferenceData(
       brokenReferences.length === 0 &&
       countMismatches.length === 0 &&
       manifestIssues.length === 0 &&
-      battleDataIssues.length === 0,
+      battleDataIssues.length === 0 &&
+      duplicateKeys.length === 0 &&
+      placeholderIssues.length === 0,
     version: dataset.version,
     rowCounts,
     missingKoreanFields,
@@ -398,6 +467,9 @@ export function validateReferenceData(
     countMismatches,
     manifestIssues,
     battleDataIssues,
+    duplicateKeys,
+    placeholderIssues,
+    sourceDiagnostics,
     sourceCommits: dataset.sourceCommits,
     sha256: dataset.sha256,
   }

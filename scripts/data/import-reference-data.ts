@@ -3,7 +3,10 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parse } from 'csv-parse/sync'
-import type { ReferenceDataset } from '../../src/features/localization/reference-data-validation'
+import type {
+  ReferenceDataset,
+  SourceDiagnostic,
+} from '../../src/features/localization/reference-data-validation'
 import {
   buildFormGigantamaxOptions,
   buildFormTeraOptions,
@@ -115,6 +118,9 @@ const minecraftItemAliases = new Map<string, string>([
 const cobblemonItemNameSupplementsKo = new Map<string, string>([
   ['kasid_berry', '카시드열매'], ['payaba_berry', '파야열매'],
 ])
+const cobblemonItemNameOverridesKo = new Map<string, string>([
+  ['poke_puff', '포플레'],
+])
 
 function readCsv(path: string): CsvRow[] {
   return parse(readFileSync(path, 'utf8'), {
@@ -199,12 +205,20 @@ function localizedItemDisplay(
   row: CsvRow,
 ): { nameKo: string; descriptionKo: string } {
   const minecraftId = minecraftItemAliases.get(row.ItemID) ?? row.ItemID
-  const nameKo = koreanValue(localization[`item.cobblemon.${row.ItemID}`])
+  const nameKo = cobblemonItemNameOverridesKo.get(row.ItemID)
+    ?? koreanValue(localization[`item.cobblemon.${row.ItemID}`])
     ?? koreanValue(row.NameKO)
     ?? minecraftItemNamesKo.get(minecraftId)
     ?? cobblemonItemNameSupplementsKo.get(row.ItemID)
   if (!nameKo) throw new Error(`items:${row.ItemID}:unlocalized-name`)
-  const descriptionKo = koreanValue(localization[`item.cobblemon.${row.ItemID}.tooltip`])
+  const numberedTooltips: string[] = []
+  for (let index = 1; ; index += 1) {
+    const value = koreanValue(localization[`item.cobblemon.${row.ItemID}.tooltip_${index}`])
+    if (!value) break
+    numberedTooltips.push(value)
+  }
+  const descriptionKo = (numberedTooltips.length > 0 ? numberedTooltips.join(' ') : null)
+    ?? koreanValue(localization[`item.cobblemon.${row.ItemID}.tooltip`])
     ?? koreanValue(row.Effect)
     ?? `${nameKo}의 한국어 설명이 원본에 제공되지 않습니다.`
   return { nameKo, descriptionKo }
@@ -579,12 +593,22 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
   const moveNameLookup = new Map(moveRows.map((row, index) => [row.NameEN.toLowerCase(), moves[index].nameKo]))
   const speciesIds = new Set(species.map((row) => row.id))
   const formIds = new Set(forms.map((row) => row.id))
+  const sourceDiagnostics: SourceDiagnostic[] = []
   const evolutions = evolutionRows.map((row, index) => {
+    const evolutionId = `${row.FromSpeciesID}>${row.ToSpeciesID}:${index}`
     const sameSpeciesMegaFormId = `${row.FromSpeciesID}-mega`
     const targetsSameSpeciesMegaForm = !speciesIds.has(row.ToSpeciesID)
       && row.ToSpeciesID === `mega${row.FromSpeciesID}`
+    if (targetsSameSpeciesMegaForm && !formIds.has(sameSpeciesMegaFormId)) {
+      sourceDiagnostics.push({
+        code: 'missing-evolution-target-form',
+        table: 'evolutions',
+        key: evolutionId,
+        target: `forms:${sameSpeciesMegaFormId}`,
+      })
+    }
     return {
-      id: `${row.FromSpeciesID}>${row.ToSpeciesID}:${index}`,
+      id: evolutionId,
       fromSpeciesId: row.FromSpeciesID,
       toSpeciesId: targetsSameSpeciesMegaForm ? row.FromSpeciesID : row.ToSpeciesID,
       toFormId: targetsSameSpeciesMegaForm && formIds.has(sameSpeciesMegaFormId)
@@ -645,6 +669,7 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
         .map(([name, path]) => [name, fileHash(path, 'sha256')]),
     ),
     battleOnlyDiagnostics,
+    sourceDiagnostics,
     reportedCounts: actualCounts,
     types,
     species,

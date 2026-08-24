@@ -891,6 +891,9 @@ async function registerPokemon(
     await expect(page.getByLabel('특성', { exact: true })).toHaveValue('')
     await expect(page.getByRole('option', { name: '저수 · 숨겨진 특성' })).toHaveCount(0)
     await expect(page.getByRole('option', { name: '촉촉바디' })).toBeAttached()
+    await expect(page.getByText('거다이맥스 불가능')).toBeVisible()
+    await expect(page.getByRole('checkbox', { name: '거다이맥스 인자 보유' })).toBeDisabled()
+    await expect(page.getByRole('checkbox', { name: '거다이맥스 인자 보유' })).not.toBeChecked()
     await page.getByRole('button', { name: '이전' }).click()
     await page.getByRole('button', { name: '이전' }).click()
     await page.getByLabel('모습', { exact: true }).selectOption({ label: '기본 모습' })
@@ -1007,15 +1010,14 @@ async function expectNoInternalIdentifiers(page: import('@playwright/test').Page
   expect(visibleText).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i)
   expect(page.url()).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i)
   for (const identifier of [
-    `vaporeon-${suffix}`,
-    `vaporeon-default-${suffix}`,
-    `vaporeon-wave-${suffix}`,
-    `vaporeon-gmax-${suffix}`,
-    `jolly-${suffix}`,
-    ...teraTypeIdentifiers.map((identifier) => `${identifier}-${suffix}`),
-  ]) {
+    typeId, speciesId, formId, alternateFormId, gigantamaxFormId,
+    targetSpeciesId, targetFormId, natureId, abilityId, disallowedAbilityId,
+    itemId, allowedMoveId, secondAllowedMoveId, otherSpeciesMoveId,
+    ...teraTypeIds,
+  ].filter(Boolean)) {
     expect(visibleText).not.toContain(identifier)
   }
+  expect(visibleText).not.toMatch(new RegExp(`[a-z][a-z0-9-]*-${suffix}`, 'iu'))
 }
 
 type CleanupStepResult = { error: unknown; residue?: number | null }

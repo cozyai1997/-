@@ -18,11 +18,14 @@ import {
 } from '../../scripts/data/import-reference-data'
 
 const forms = mechanicsSource.forms as ReferenceFormRow[]
-const productionSource = 'C:\\Users\\PARKSUNGSIK\\OneDrive\\문서\\Desktop\\Cobbleverse_Pokemon_Manager_Package_v1.3_TABLE_FIX'
+const productionSource = process.env.REFERENCE_DATA_SOURCE
+const runReferenceDataIntegration = process.env.RUN_REFERENCE_DATA_INTEGRATION === '1'
+  && Boolean(productionSource)
 const hangulPattern = /[ㄱ-ㅎㅏ-ㅣ가-힣]/u
 let cachedProductionDataset: ReferenceDataset | undefined
 
 function productionDataset() {
+  if (!productionSource) throw new Error('REFERENCE_DATA_SOURCE 환경 변수가 필요합니다.')
   cachedProductionDataset ??= importReferenceData(productionSource)
   return cachedProductionDataset
 }
@@ -115,6 +118,7 @@ describe('Cobbleverse 전투 데이터 정규화', () => {
     ])
   })
 
+  describe.runIf(runReferenceDataIntegration)('실제 Cobbleverse 원본 통합', () => {
   it('Cobbleverse 전체 원본을 1,498개 전투 폼과 정확한 테라·거다이맥스 관계로 만든다', () => {
     const result = productionDataset()
 
@@ -127,6 +131,7 @@ describe('Cobbleverse 전투 데이터 정규화', () => {
     expect(result.forms.find((form) => form.id === 'charizard-megax')?.isBattleOnly).toBe(true)
     expect(result.formGigantamaxOptions).toEqual(expect.arrayContaining([
       { sourceFormId: 'toxtricity-normal', gigantamaxFormId: 'toxtricity-gmax' },
+      { sourceFormId: 'toxtricity-lowkey', gigantamaxFormId: 'toxtricity-lowkeygmax' },
       { sourceFormId: 'urshifu-normal', gigantamaxFormId: 'urshifu-gmax' },
       { sourceFormId: 'urshifu-rapidstrike', gigantamaxFormId: 'urshifu-rapidstrikegmax' },
       { sourceFormId: 'alcremie-normal', gigantamaxFormId: 'alcremie-gmax' },
@@ -167,6 +172,19 @@ describe('Cobbleverse 전투 데이터 정규화', () => {
     expect(result.items.find((item) => item.id === 'slimeball')).toMatchObject({
       nameKo: '슬라임볼',
     })
+    expect(result.items.find((item) => item.id === 'poke_puff')).toMatchObject({
+      nameKo: '포플레',
+    })
+    expect(result.items.find((item) => item.id === 'focus_sash')?.descriptionKo)
+      .toBe('지니게 하면 HP가 꽉 찼을 때 기절할 듯한 기술을 당해도 HP 1로 한 번은 버틴다 사용 시 소모된다')
+    expect(result.items.find((item) => item.id === 'bug_gem')?.descriptionKo)
+      .toBe('벌레타입의 주얼. 지니게 하면 한 번만 벌레 기술의 위력이 강해진다 사용 시 소모된다')
+    expect(result.items.find((item) => item.id === 'metal_coat')?.descriptionKo)
+      .toBe('지니게 하면 강철타입 기술의 위력이 올라간다 롱스톤 또는 스라크에게 지니게 한 뒤 통신교환을 하면 각각 강철톤, 핫삼으로 진화한다')
+    expect(result.items.find((item) => item.id === 'kings_rock')?.descriptionKo)
+      .toBe('지니게 하면 공격해서 데미지를 줄 때 상대를 풀죽이기도 한다 야돈 또는 슈륙챙이에 지니게 한 뒤 통신교환을 하면 각각 야도킹, 왕구리로 진화한다')
+    expect(result.items.filter((item) => item.descriptionKo?.includes('한국어 설명이 원본에 제공되지 않습니다')))
+      .toHaveLength(231)
     expect(result.items.every((item) => (
       hangulPattern.test(item.nameKo) && hangulPattern.test(item.descriptionKo ?? '')
     ))).toBe(true)
@@ -218,5 +236,6 @@ describe('Cobbleverse 전투 데이터 정규화', () => {
       'level_up',
       {},
     )).toThrow('evolutions:unlocalized-condition:Unknown source atom')
+  })
   })
 })

@@ -96,6 +96,68 @@ describe('한국어 기준 데이터 공개 검증', () => {
     })
   })
 
+  it('식별자 배열과 관계 배열의 중복 키를 독립적으로 거부한다', () => {
+    const dataset = structuredClone(completeFixture) as ReferenceDataset
+    dataset.types.push({ ...dataset.types[0] })
+    dataset.learnsets.push({ ...dataset.learnsets[0] })
+    dataset.formTeraOptions.push({ ...dataset.formTeraOptions[0] })
+    dataset.reportedCounts.types = 2
+    dataset.reportedCounts.learnsets = 2
+    dataset.reportedCounts.formTeraOptions = 3
+
+    const report = validateReferenceData(dataset, {
+      expectedRowCounts: { ...fixtureCounts, types: 2, learnsets: 2 },
+      expectedBattleRowCounts: { ...fixtureBattleCounts, formTeraOptions: 3 },
+      expectedBattleDatasetProfile: fixtureBattleProfile,
+    })
+
+    expect(report.valid).toBe(false)
+    expect(report.duplicateKeys).toEqual(expect.arrayContaining([
+      { table: 'types', key: 'normal' },
+      { table: 'learnsets', key: 'eevee:eevee-normal:tackle:level:1:기본 습득' },
+      { table: 'formTeraOptions', key: 'eevee-normal:normal' },
+    ]))
+  })
+
+  it('서로 다른 행 ID로 포장된 동일 진화 관계도 거부한다', () => {
+    const dataset = structuredClone(completeFixture) as ReferenceDataset
+    dataset.evolutions = [
+      { id: 'evolution-a', fromSpeciesId: 'eevee', toSpeciesId: 'eevee', conditionKo: '특수 조건' },
+      { id: 'evolution-b', fromSpeciesId: 'eevee', toSpeciesId: 'eevee', conditionKo: '특수 조건' },
+    ]
+    dataset.reportedCounts.evolutions = 2
+
+    const report = validateReferenceData(dataset, {
+      expectedRowCounts: { ...fixtureCounts, evolutions: 2 },
+      expectedBattleRowCounts: fixtureBattleCounts,
+      expectedBattleDatasetProfile: fixtureBattleProfile,
+    })
+
+    expect(report.valid).toBe(false)
+    expect(report.duplicateKeys).toContainEqual({
+      table: 'evolutions',
+      key: 'eevee::eevee::특수 조건',
+    })
+  })
+
+  it('한글이 섞여 있어도 printf·중괄호 보간 토큰이 남은 표시 필드를 거부한다', () => {
+    const dataset = structuredClone(completeFixture) as ReferenceDataset
+    dataset.items[0].nameKo = '%s포플레'
+    dataset.items[0].descriptionKo = '{count}개 사용'
+
+    const report = validateReferenceData(dataset, {
+      expectedRowCounts: fixtureCounts,
+      expectedBattleRowCounts: fixtureBattleCounts,
+      expectedBattleDatasetProfile: fixtureBattleProfile,
+    })
+
+    expect(report.valid).toBe(false)
+    expect(report.placeholderIssues).toEqual([
+      { table: 'items', key: 'soothe-bell', field: 'nameKo', token: '%s' },
+      { table: 'items', key: 'soothe-bell', field: 'descriptionKo', token: '{count}' },
+    ])
+  })
+
   it('검증 실패 시 기존 활성 게시 버전을 유지한다', () => {
     const dataset = englishDescriptionFixture as ReferenceDataset
     const invalidReport = validateReferenceData(englishDescriptionFixture as ReferenceDataset, {

@@ -41,7 +41,6 @@ function localizedFormName(value: string): string {
 
 export function prepareCoreReferenceData(dataset: ReferenceDataset) {
   const speciesIds = new Set(dataset.species.map((row) => row.id))
-  const formIds = new Set(dataset.forms.map((row) => row.id))
   const typeIds = new Set(dataset.types.map((row) => row.id))
 
   const types = dataset.types.map((row, index) => ({
@@ -90,21 +89,7 @@ export function prepareCoreReferenceData(dataset: ReferenceDataset) {
     increasedStat: null,
     decreasedStat: null,
   }))
-  const evolutions = dataset.evolutions
-    .filter((row) => (
-      hangulPattern.test(row.conditionKo)
-      && row.fromSpeciesId !== row.toSpeciesId
-      && speciesIds.has(row.fromSpeciesId)
-      && speciesIds.has(row.toSpeciesId)
-      && formIds.has(row.fromFormId ?? `${row.fromSpeciesId}-normal`)
-      && formIds.has(row.toFormId ?? `${row.toSpeciesId}-normal`)
-    ))
-    .map((row, index) => ({
-      fromFormIdentifier: row.fromFormId ?? `${row.fromSpeciesId}-normal`,
-      toFormIdentifier: row.toFormId ?? `${row.toSpeciesId}-normal`,
-      conditionKo: row.conditionKo,
-      sortOrder: index,
-    }))
+  const evolutions = analyzeEvolutionPublication(dataset).evolutions
   const typeMatchups = dataset.typeMatchups
     .filter((row) => typeIds.has(row.attackingTypeId) && typeIds.has(row.defendingTypeId))
     .map((row) => ({
@@ -114,6 +99,64 @@ export function prepareCoreReferenceData(dataset: ReferenceDataset) {
     }))
 
   return { types, species, forms, abilities, items, natures, evolutions, typeMatchups }
+}
+
+export function analyzeEvolutionPublication(dataset: ReferenceDataset) {
+  const speciesIds = new Set(dataset.species.map((row) => row.id))
+  const formIds = new Set(dataset.forms.map((row) => row.id))
+  const missingTargetDiagnostics = (dataset.sourceDiagnostics ?? [])
+    .filter((diagnostic) => diagnostic.code === 'missing-evolution-target-form')
+  const missingTargetKeys = new Set(missingTargetDiagnostics.map((diagnostic) => diagnostic.key))
+  const evolutions: Array<{
+    fromFormIdentifier: string
+    toFormIdentifier: string
+    conditionKo: string
+    sortOrder: number
+  }> = []
+  let excludedPureSameSpeciesCount = 0
+  let excludedMissingTargetCount = 0
+  let excludedInvalidCount = 0
+
+  dataset.evolutions.forEach((row, sourceIndex) => {
+    const key = row.id ?? `${row.fromSpeciesId}>${row.toSpeciesId}:${sourceIndex}`
+    const fromFormIdentifier = row.fromFormId ?? `${row.fromSpeciesId}-normal`
+    const toFormIdentifier = row.toFormId ?? `${row.toSpeciesId}-normal`
+    if (
+      !hangulPattern.test(row.conditionKo)
+      || !speciesIds.has(row.fromSpeciesId)
+      || !speciesIds.has(row.toSpeciesId)
+      || !formIds.has(fromFormIdentifier)
+      || (row.toFormId !== null && row.toFormId !== undefined && !formIds.has(toFormIdentifier))
+    ) {
+      excludedInvalidCount += 1
+      return
+    }
+    if (row.fromSpeciesId === row.toSpeciesId && !row.toFormId) {
+      if (missingTargetKeys.has(key)) excludedMissingTargetCount += 1
+      else excludedPureSameSpeciesCount += 1
+      return
+    }
+    if (!formIds.has(toFormIdentifier)) {
+      excludedInvalidCount += 1
+      return
+    }
+    evolutions.push({
+      fromFormIdentifier,
+      toFormIdentifier,
+      conditionKo: row.conditionKo,
+      sortOrder: sourceIndex,
+    })
+  })
+
+  return {
+    sourceCount: dataset.evolutions.length,
+    publishableCount: evolutions.length,
+    excludedPureSameSpeciesCount,
+    excludedMissingTargetCount,
+    excludedInvalidCount,
+    missingTargetDiagnostics,
+    evolutions,
+  }
 }
 
 function sqlLiteral(value: string): string {
