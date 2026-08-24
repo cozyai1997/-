@@ -10,6 +10,7 @@ const dataset: ReferenceDataset = {
   version: 'fixture-v1',
   sourceCommits: { source: 'a'.repeat(40) },
   sha256: { source: 'b'.repeat(64) },
+  battleOnlyDiagnostics: [],
   reportedCounts: {
     types: 1,
     species: 1,
@@ -22,6 +23,9 @@ const dataset: ReferenceDataset = {
     formAbilities: 0,
     natures: 1,
     typeMatchups: 1,
+    teraTypes: 2,
+    formTeraOptions: 2,
+    formGigantamaxOptions: 1,
   },
   types: [{ id: 'normal', nameKo: '노말' }],
   species: [{
@@ -31,8 +35,8 @@ const dataset: ReferenceDataset = {
     descriptionKo: '여러 모습으로 진화하는 포켓몬.',
   }],
   forms: [
-    { id: 'eevee-normal', speciesId: 'eevee', baseFormId: null, nameKo: '일반', primaryTypeId: 'normal' },
-    { id: 'eevee-gmax', speciesId: 'eevee', baseFormId: 'eevee-normal', nameKo: 'Gmax', primaryTypeId: 'normal' },
+    { id: 'eevee-normal', speciesId: 'eevee', baseFormId: null, nameKo: '일반', primaryTypeId: 'normal', secondaryTypeId: null, baseStats: { hp: 55, attack: 55, defense: 50, special_attack: 45, special_defense: 65, speed: 55 }, isBattleOnly: false, aspects: [] },
+    { id: 'eevee-gmax', speciesId: 'eevee', baseFormId: 'eevee-normal', nameKo: 'Gmax', primaryTypeId: 'normal', secondaryTypeId: null, baseStats: { hp: 55, attack: 55, defense: 50, special_attack: 45, special_defense: 65, speed: 55 }, isBattleOnly: true, aspects: ['gmax'] },
   ],
   abilities: [{ id: 'adaptability', nameKo: '적응력', descriptionKo: '같은 타입 기술이 강해진다.' }],
   moves: [],
@@ -48,7 +52,16 @@ const dataset: ReferenceDataset = {
     conditionKo: '물의돌 사용',
   }],
   formAbilities: [],
-  natures: [{ id: 'hardy', nameKo: '노력' }],
+  natures: [{ id: 'hardy', nameKo: '노력', increasedStat: null, decreasedStat: null }],
+  teraTypes: [
+    { id: 'normal', nameKo: '노말', referenceTypeId: 'normal', sortOrder: 0 },
+    { id: 'stellar', nameKo: '스텔라', referenceTypeId: null, sortOrder: 19 },
+  ],
+  formTeraOptions: [
+    { formId: 'eevee-normal', teraTypeId: 'normal' },
+    { formId: 'eevee-normal', teraTypeId: 'stellar' },
+  ],
+  formGigantamaxOptions: [{ sourceFormId: 'eevee-normal', gigantamaxFormId: 'eevee-gmax' }],
   typeMatchups: [{ attackingTypeId: 'normal', defendingTypeId: 'normal', multiplier: 1 }],
 }
 

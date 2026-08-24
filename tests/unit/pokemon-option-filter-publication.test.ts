@@ -14,6 +14,11 @@ function countCorrectCandidate(): ReferenceDataset {
     speciesId: 'species-a',
     baseFormId: index === 0 ? null : 'form-0',
     nameKo: `모습가-${index}`,
+    primaryTypeId: 'normal',
+    secondaryTypeId: null,
+    baseStats: { hp: 50, attack: 50, defense: 50, special_attack: 50, special_defense: 50, speed: 50 },
+    isBattleOnly: false,
+    aspects: [],
   }))
   const moves = Array.from({ length: 826 }, (_, index) => ({
     id: `move-${index}`,
@@ -30,6 +35,7 @@ function countCorrectCandidate(): ReferenceDataset {
     version: 'candidate-v1',
     sourceCommits: {},
     sha256: {},
+    battleOnlyDiagnostics: [],
     reportedCounts: {
       types: 1,
       species: 1,
@@ -42,6 +48,9 @@ function countCorrectCandidate(): ReferenceDataset {
       formAbilities: 3_055,
       natures: 0,
       typeMatchups: 0,
+      teraTypes: 0,
+      formTeraOptions: 0,
+      formGigantamaxOptions: 0,
     },
     types: [{ id: 'normal', nameKo: '노말' }],
     species: [{
@@ -75,6 +84,9 @@ function countCorrectCandidate(): ReferenceDataset {
       isHidden: false,
     })),
     natures: [],
+    teraTypes: [],
+    formTeraOptions: [],
+    formGigantamaxOptions: [],
     typeMatchups: [],
   }
 }
