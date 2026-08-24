@@ -16,6 +16,8 @@ const ids = {
   failedBatch: randomUUID(),
   firstSuccessfulBatch: randomUUID(),
   secondSuccessfulBatch: randomUUID(),
+  thirdSuccessfulBatch: randomUUID(),
+  obsoleteTera: randomUUID(),
   rotationSpecies: randomUUID(),
   rotationForm: randomUUID(),
   type: randomUUID(),
@@ -498,6 +500,24 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
     expect((await admin.from('reference_tera_types').update({ reference_type_id: null }).eq('id', normal.data!.id)).error).toBeNull()
     expect((await admin.from('reference_tera_types')
       .update({ publication_id: ids.retiredPublication }).eq('id', normal.data!.id)).error).toBeNull()
+    expect((await admin.from('reference_tera_types').insert({
+      id: ids.obsoleteTera,
+      publication_id: ids.publication,
+      identifier: `atomic-obsolete-${ids.obsoleteTera}`,
+      name_ko: '폐기 테라',
+      sort_order: 0,
+      is_active: true,
+    })).error).toBeNull()
+    runLocalSql(`do $swap$
+begin
+  update public.reference_tera_types set sort_order = -1
+    where publication_id = '${ids.publication}' and identifier = 'fighting';
+  update public.reference_tera_types set sort_order = 1
+    where publication_id = '${ids.publication}' and identifier = 'flying';
+  update public.reference_tera_types set sort_order = 2
+    where publication_id = '${ids.publication}' and identifier = 'fighting';
+end
+$swap$;`)
     expect((await admin.from('reference_species').insert({
       id: ids.rotationSpecies,
       publication_id: ids.retiredPublication,
@@ -526,16 +546,46 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
       p_batch_id: ids.secondSuccessfulBatch,
     })
     expect(replacement.error).toBeNull()
-    const [rotated, ownedAfter, retiredOptions] = await Promise.all([
+    const [rotated, ownedAfter, retiredOptions, obsolete] = await Promise.all([
       admin.from('reference_tera_types').select('id,publication_id,reference_type_id')
         .eq('identifier', 'normal').single(),
       admin.from('owned_pokemon').select('tera_type_id').eq('user_id', rotationOwnerId).single(),
       admin.from('reference_form_tera_options').select('form_id', { count: 'exact', head: true })
         .eq('publication_id', ids.retiredPublication).eq('tera_type_id', normal.data!.id),
+      admin.from('reference_tera_types').select('publication_id,is_active').eq('id', ids.obsoleteTera).single(),
     ])
     expect(rotated.data).toEqual({ id: normal.data!.id, publication_id: ids.publication, reference_type_id: ids.type })
     expect(ownedAfter.data).toEqual({ tera_type_id: normal.data!.id })
     expect(retiredOptions.count).toBe(0)
+    expect(obsolete.data).toEqual({ publication_id: ids.publication, is_active: false })
+
+    const beforeIdempotent = await Promise.all([
+      admin.from('reference_tera_types').select('id,identifier,reference_type_id,sort_order,is_active')
+        .eq('publication_id', ids.publication).order('identifier'),
+      admin.from('reference_moves').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_forms').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_form_tera_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_form_gigantamax_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+    ])
+    runLocalSql(stagedRowsSql(ids.thirdSuccessfulBatch, false))
+    const idempotent = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+      p_publication_id: ids.publication,
+      p_batch_id: ids.thirdSuccessfulBatch,
+    })
+    expect(idempotent.error).toBeNull()
+    const afterIdempotent = await Promise.all([
+      admin.from('reference_tera_types').select('id,identifier,reference_type_id,sort_order,is_active')
+        .eq('publication_id', ids.publication).order('identifier'),
+      admin.from('reference_moves').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_forms').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_form_tera_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_form_gigantamax_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_option_filter_publication_staging').select('*', { count: 'exact', head: true })
+        .eq('publication_id', ids.publication),
+    ])
+    expect(afterIdempotent.slice(0, 5).map(({ data, count }) => ({ data, count })))
+      .toEqual(beforeIdempotent.map(({ data, count }) => ({ data, count })))
+    expect(afterIdempotent[5].count).toBe(0)
   }, 60_000)
 
   it('은퇴 게시본은 교체 대상으로 받지 않는다', async () => {

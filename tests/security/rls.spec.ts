@@ -317,6 +317,16 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
       name_ko: '금지',
       sort_order: 99,
     })
+    const teraOptionWrite = await bob.client.from('reference_form_tera_options').insert({
+      publication_id: referencePublicationId,
+      form_id: formId,
+      tera_type_id: activeTeraTypeId,
+    })
+    const gigantamaxOptionWrite = await bob.client.from('reference_form_gigantamax_options').insert({
+      publication_id: referencePublicationId,
+      source_form_id: formId,
+      gigantamax_form_id: gigantamaxFormId,
+    })
     const teraOptions = await bob.client.from('reference_form_tera_options').select('form_id,tera_type_id')
     const gigantamaxOptions = await bob.client.from('reference_form_gigantamax_options').select('source_form_id,gigantamax_form_id')
     const anonymousTeraOptions = await anonymous.from('reference_form_tera_options').select('form_id')
@@ -330,6 +340,8 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
     expect(visible.data).toEqual([{ id: activeTeraTypeId, name_ko: '노말' }])
     expect(anonymousRead.error).not.toBeNull()
     expect(userWrite.error?.code).toBe('42501')
+    expect(teraOptionWrite.error?.code).toBe('42501')
+    expect(gigantamaxOptionWrite.error?.code).toBe('42501')
     expect(teraOptions.data).toEqual([{ form_id: formId, tera_type_id: activeTeraTypeId }])
     expect(gigantamaxOptions.data).toEqual([{ source_form_id: formId, gigantamax_form_id: gigantamaxFormId }])
     expect(anonymousTeraOptions.error).not.toBeNull()

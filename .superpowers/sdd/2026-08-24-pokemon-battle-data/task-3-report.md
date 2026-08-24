@@ -103,3 +103,25 @@ pnpm typecheck
 - Replaced redundant primary-key prefix indexes with option lookup indexes on `(publication_id, tera_type_id)` and `(publication_id, gigantamax_form_id)`.
 
 No unresolved concerns.
+
+## Review fix: lifecycle ordering and idempotence
+
+### RED
+
+- The first lifecycle implementation attempted `SET CONSTRAINTS` without the `public.` qualification inside a function with an empty search path. The late replacement regression returned `42704`; qualifying the known deferrable constraint resolved it.
+
+### GREEN
+
+- `pnpm supabase db reset --local`: applied all migrations and seed successfully.
+- Atomic publication suite: 4/4 passed in 66.96s total. Individual heavy cases remained below the gateway limit: late rollback 11.138s, canonical rejection plus full replacement 18.060s, obsolete-slot/canonical-order-swap rotation plus no-intervening idempotence 32.316s.
+- RLS suite: 6/6 passed in 5.23s, including authenticated write denial for both option tables.
+- Owned-Pokemon suite: 17/17 passed in 3.01s, including correction that preserves a valid Tera selection and `has_gigantamax_factor = true`.
+- `pnpm supabase db lint --local`: `No schema errors found`.
+- Regenerated `src/types/database.generated.ts` after the reset; `pnpm typecheck` passed.
+
+### Review changes
+
+- Made the publication/sort-order unique constraint deferrable. Before each canonical Tera upsert, the replacement transaction deterministically moves all target-publication Tera rows to temporary negative sort slots. This clears both obsolete-slot conflicts and canonical-order swaps while global IDs are moved.
+- The lifecycle regression creates an active obsolete row at the `normal` slot, swaps active canonical `fighting`/`flying` orders, preserves an owned Pokemon’s `normal` UUID through rotation, deactivates the obsolete row, then restages and proves a no-intervening-change replacement leaves reference state unchanged and staging empty.
+
+No unresolved concerns.

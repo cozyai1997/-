@@ -32,7 +32,7 @@ create table public.reference_tera_types (
   sort_order smallint not null,
   is_active boolean not null default true,
   unique (publication_id, id),
-  unique (publication_id, sort_order),
+  unique (publication_id, sort_order) deferrable initially immediate,
   foreign key (publication_id) references public.data_publications(id) on delete restrict,
   foreign key (publication_id, reference_type_id)
     references public.reference_types(publication_id, id) on delete restrict
@@ -428,6 +428,21 @@ begin
     and staged.row_kind = 'tera_type'
     and staged.payload ->> 'identifier' = tera.identifier;
   delete from public.reference_form_tera_options where publication_id = p_publication_id;
+
+  -- Free every target slot before assigning staged orders. This makes both an
+  -- obsolete target row occupying a canonical slot and canonical-row order
+  -- swaps safe while stable identifier UUIDs move into this publication.
+  set constraints public.reference_tera_types_publication_id_sort_order_key deferred;
+  with target_rows as materialized (
+    select id, row_number() over (order by id) as position
+    from public.reference_tera_types
+    where publication_id = p_publication_id
+  )
+  update public.reference_tera_types as tera
+  set sort_order = (-32768 + target_rows.position)::smallint
+  from target_rows
+  where tera.id = target_rows.id;
+
   insert into public.reference_tera_types (id, publication_id, identifier, name_ko, reference_type_id, sort_order, is_active)
   select (payload ->> 'tera_type_id')::uuid, p_publication_id, payload ->> 'identifier', payload ->> 'name_ko',
     nullif(payload ->> 'reference_type_id', '')::uuid, (payload ->> 'sort_order')::smallint,

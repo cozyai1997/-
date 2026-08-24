@@ -695,6 +695,24 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
     expect(reconciled.data).toEqual({ tera_type_id: null, has_gigantamax_factor: false })
   })
 
+  it('같은 유효 폼으로 정정해도 Tera와 거다이맥스 인자를 모두 보존한다', async () => {
+    const created = await alice.rpc('create_owned_pokemon_with_moves', rpcInput({
+      p_tera_type_id: ids.allowedTeraType,
+      p_has_gigantamax_factor: true,
+      p_nickname: `전투보존-${randomUUID().slice(0, 8)}`,
+    }))
+    expect(created.error).toBeNull()
+    const pokemonId = created.data as string
+    const corrected = await alice.rpc('correct_owned_pokemon', correctionInput(pokemonId, {
+      p_species_id: ids.species,
+      p_form_id: ids.exactForm,
+      p_reason_ko: '유효한 전투 선택 보존',
+    }))
+    expect(corrected.error).toBeNull()
+    expect((await alice.from('owned_pokemon').select('tera_type_id,has_gigantamax_factor').eq('id', pokemonId).single()).data)
+      .toEqual({ tera_type_id: ids.allowedTeraType, has_gigantamax_factor: true })
+  })
+
   it('명시 변경과 오래된 다른 전투 선택을 필드별로 독립 처리하고 유효한 정정은 보존한다', async () => {
     const created = await alice.rpc('create_owned_pokemon_with_moves', rpcInput({
       p_tera_type_id: ids.allowedTeraType,
