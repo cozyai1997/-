@@ -57,6 +57,40 @@ describe('PokemonBattleFields', () => {
     expect(screen.getByText('거다이맥스 불가능')).toBeVisible()
     await waitFor(() => expect(onGigantamaxFactorChange).toHaveBeenCalledWith(false))
   })
+
+  it('외부 로딩 중에는 선택을 보존하고 성공한 비적격 프로필에서만 해제한다', async () => {
+    const onGigantamaxFactorChange = vi.fn()
+    const view = render(
+      <PokemonBattleFields
+        teraTypes={[]}
+        teraTypeId="type-fire-internal-id"
+        canGigantamax={false}
+        hasGigantamaxFactor
+        disabled
+        onTeraTypeChange={vi.fn()}
+        onGigantamaxFactorChange={onGigantamaxFactorChange}
+      />,
+    )
+
+    expect(onGigantamaxFactorChange).not.toHaveBeenCalled()
+
+    view.rerender(
+      <PokemonBattleFields
+        teraTypes={teraTypes}
+        teraTypeId="type-fire-internal-id"
+        canGigantamax={false}
+        hasGigantamaxFactor
+        disabled={false}
+        onTeraTypeChange={vi.fn()}
+        onGigantamaxFactorChange={onGigantamaxFactorChange}
+      />,
+    )
+
+    const checkbox = screen.getByRole('checkbox', { name: '거다이맥스 인자 보유' })
+    expect(checkbox).toBeDisabled()
+    expect(checkbox).not.toBeChecked()
+    await waitFor(() => expect(onGigantamaxFactorChange).toHaveBeenCalledWith(false))
+  })
 })
 
 describe('PokemonBattleBadges', () => {

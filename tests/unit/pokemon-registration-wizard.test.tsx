@@ -438,6 +438,47 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     expect(submit).toBeDisabled()
   })
 
+  it('복원한 전투 선택은 폼 프로필을 불러오는 동안과 조회 실패 뒤에도 유지한다', async () => {
+    let rejectInitialLoad: ((reason: Error) => void) | undefined
+    sessionStorage.setItem(registrationDraftKey, JSON.stringify({
+      ...createRegistrationDraft(),
+      step: 3,
+      speciesId: 'species-water',
+      formId: 'form-water',
+      teraTypeId: 'tera-water',
+      hasGigantamaxFactor: true,
+    }))
+    listPokemonFilteredOptions
+      .mockImplementationOnce(() => new Promise<PokemonFilteredOptions>((_resolve, reject) => {
+        rejectInitialLoad = reject
+      }))
+      .mockRejectedValue(new Error('필터 조회 실패'))
+
+    render(<PokemonRegistrationWizard />)
+
+    expect(await screen.findByText(
+      '특성·기술·테라타입·거다이맥스 정보를 불러오는 중입니다.',
+    )).toBeVisible()
+    expect(await screen.findAllByRole('option', { name: '명랑' })).toHaveLength(2)
+    await waitFor(() => {
+      expect(JSON.parse(sessionStorage.getItem(registrationDraftKey) ?? '{}')).toMatchObject({
+        teraTypeId: 'tera-water',
+        hasGigantamaxFactor: true,
+      })
+    })
+
+    rejectInitialLoad?.(new Error('첫 필터 조회 실패'))
+    expect(await screen.findByText(
+      '특성·기술·테라타입·거다이맥스 정보를 불러오지 못했습니다. 종과 모습을 다시 선택해 주세요.',
+    )).toBeVisible()
+    await waitFor(() => {
+      expect(JSON.parse(sessionStorage.getItem(registrationDraftKey) ?? '{}')).toMatchObject({
+        teraTypeId: 'tera-water',
+        hasGigantamaxFactor: true,
+      })
+    })
+  })
+
   it('복원한 v2 초안을 필터 결과와 맞춘 뒤 유효한 기술과 경로만 새로고침까지 유지한다', async () => {
     sessionStorage.setItem(registrationDraftKey, JSON.stringify({
       ...createRegistrationDraft(),

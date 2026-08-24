@@ -32,10 +32,10 @@ export function PokemonBattleFields({
     : ''
 
   useEffect(() => {
-    if (!canGigantamax && hasGigantamaxFactor) {
+    if (!disabled && !canGigantamax && hasGigantamaxFactor) {
       onGigantamaxFactorChange(false)
     }
-  }, [canGigantamax, hasGigantamaxFactor, onGigantamaxFactorChange])
+  }, [canGigantamax, disabled, hasGigantamaxFactor, onGigantamaxFactorChange])
 
   return (
     <div className="battle-fields">
