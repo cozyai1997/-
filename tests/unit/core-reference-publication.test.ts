@@ -1,3 +1,7 @@
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { resolve } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -11,6 +15,16 @@ import {
   type ReferenceDataset,
 } from '../../src/features/localization/reference-data-validation'
 import { publishValidatedCandidate } from '../../scripts/data/publish-reference-data'
+import { createProductionReferenceCandidate } from '../fixtures/reference-data/production-candidate'
+
+const reviewedSourceCommits = {
+  cobblemon: 'd1b8094539f2dd23bd98c1a48293fac1f2010c16',
+  koreanLocalizationContent: '9e231c83211f17e9fbb9994ef777750f04e883aa',
+}
+const reviewedSourceHashes = {
+  evolutions: 'aececbd2841ccf662732c42c5eef4c2b5c3ec3e4041fa80fab1872d21b8f108f',
+  sourceManifest: 'd9f8a25fcfed05e8a5392c474c3d0b3c834ed6f1c8a1a417eded5d72071e0531',
+}
 
 const fixtureCounts: ExpectedRowCounts = {
   types: 1,
@@ -102,6 +116,8 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
 
   it('실제 메가 폼 대상은 게시하고 순수 자기 진화와 누락된 메가 대상은 구분해 제외한다', () => {
     const candidate = structuredClone(dataset)
+    candidate.sourceCommits = reviewedSourceCommits
+    candidate.sha256 = reviewedSourceHashes
     candidate.species.push(
       { id: 'gengar', nationalDexNumber: 94, nameKo: '팬텀', descriptionKo: '그림자 포켓몬.' },
       { id: 'milotic', nationalDexNumber: 350, nameKo: '밀로틱', descriptionKo: '사랑 포켓몬.' },
@@ -113,7 +129,10 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
     )
     candidate.evolutions = [
       { id: 'gengar>megagengar:71', fromSpeciesId: 'gengar', toSpeciesId: 'gengar', toFormId: 'gengar-mega', conditionKo: '키스톤 사용' },
-      { id: 'milotic>megamilotic:233', fromSpeciesId: 'milotic', toSpeciesId: 'milotic', conditionKo: '키스톤 사용' },
+      {
+        id: 'milotic>megamilotic:233', fromSpeciesId: 'milotic', toSpeciesId: 'milotic',
+        conditionKo: '키스톤 사용; 원본에 대상 메가 폼이 없음',
+      },
     ]
     const withDiagnostics = Object.assign(candidate, {
       sourceDiagnostics: [{
@@ -184,6 +203,20 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
       .toThrow('evolutions:eevee>vaporeon:74:forms:vaporeon-normal')
   })
 
+  it('암시적 출발 기본 폼이 없으면 게시 경계에서 거부한다', () => {
+    const candidate = structuredClone(dataset)
+    candidate.species.push({
+      id: 'vaporeon', nationalDexNumber: 134, nameKo: '샤미드', descriptionKo: '물 포켓몬이다.',
+    })
+    candidate.evolutions = [{
+      id: 'vaporeon>eevee:75', fromSpeciesId: 'vaporeon', toSpeciesId: 'eevee',
+      conditionKo: '특수 조건',
+    }]
+
+    expect(() => analyzeEvolutionPublication(candidate))
+      .toThrow('evolutions:vaporeon>eevee:75:forms:vaporeon-normal')
+  })
+
   it('중복·orphan source diagnostic으로 게시 제외 수량을 조작할 수 없다', () => {
     const candidate = structuredClone(dataset)
     candidate.evolutions = [{
@@ -201,12 +234,21 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
 
   it('게시 회계는 candidate 보고 수가 아니라 실제 진화 행과 신뢰된 진단으로 계산한다', () => {
     const candidate = structuredClone(dataset)
+    candidate.sourceCommits = reviewedSourceCommits
+    candidate.sha256 = reviewedSourceHashes
+    candidate.species.push({
+      id: 'milotic', nationalDexNumber: 350, nameKo: '밀로틱', descriptionKo: '사랑 포켓몬.',
+    })
+    candidate.forms.push({
+      ...candidate.forms[0], id: 'milotic-normal', speciesId: 'milotic', nameKo: '기본 모습',
+    })
     candidate.evolutions = [{
-      id: 'eevee>megaeevee:74', fromSpeciesId: 'eevee', toSpeciesId: 'eevee', conditionKo: '키스톤 사용',
+      id: 'milotic>megamilotic:233', fromSpeciesId: 'milotic', toSpeciesId: 'milotic',
+      conditionKo: '키스톤 사용; 원본에 대상 메가 폼이 없음',
     }]
     candidate.sourceDiagnostics = [{
       code: 'missing-evolution-target-form', table: 'evolutions',
-      key: 'eevee>megaeevee:74', target: 'forms:eevee-mega',
+      key: 'milotic>megamilotic:233', target: 'forms:milotic-mega',
     }]
     candidate.reportedCounts.evolutions = 999
 
@@ -220,15 +262,60 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
   })
 
   it('실패 시 일부 행이 노출되지 않도록 하나의 트랜잭션 SQL을 만든다', () => {
-    const sql = buildCoreReferenceSql(dataset)
+    const candidate = createProductionReferenceCandidate()
+    const sql = buildCoreReferenceSql(candidate)
 
     expect(sql).toMatch(/^do \$publication\$/u)
     expect(sql).toContain('declare target_publication_id uuid;')
-    expect(sql).toContain("'fixture-v1'")
+    expect(sql).toContain("'candidate-v1'")
     expect(sql).toContain('jsonb_to_recordset')
     expect(sql).toContain('as row(identifier text, "nameKo" text, "colorHex" text')
+    expect(sql).toContain('"sourceDiagnosticIssues":[]')
     expect(sql).toContain("status = 'active'")
     expect(sql.trimEnd()).toMatch(/\$publication\$;$/u)
+  })
+
+  it.each([
+    ['printf 표시 토큰', (candidate: ReferenceDataset) => { candidate.items[0].nameKo = '%s포플레' }, '%s'],
+    ['중복 관계', (candidate: ReferenceDataset) => { candidate.learnsets[1] = { ...candidate.learnsets[0] } }, 'duplicate'],
+    ['전투 의미 위반', (candidate: ReferenceDataset) => { candidate.forms[0].baseStats.speed = 0 }, 'baseStats'],
+    ['조작된 누락 진단', (candidate: ReferenceDataset) => {
+      candidate.evolutions[0] = {
+        id: 'species-a>megaspecies-a:0', fromSpeciesId: 'species-a', fromFormId: 'form-0',
+        toSpeciesId: 'species-a', conditionKo: '키스톤 사용',
+      }
+      candidate.sourceDiagnostics = [{
+        code: 'missing-evolution-target-form', table: 'evolutions',
+        key: 'species-a>megaspecies-a:0', target: 'forms:species-a-mega',
+      }]
+    }, 'unreviewed'],
+  ] as const)('%s 후보는 실행 가능한 핵심 게시 SQL을 만들지 않는다', (_label, tamper, issue) => {
+    const candidate = createProductionReferenceCandidate()
+    tamper(candidate)
+
+    expect(() => buildCoreReferenceSql(candidate)).toThrow(issue)
+  })
+
+  it('핵심 게시 CLI는 검증 실패 후보의 출력 파일을 만들지 않는다', () => {
+    const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'pokemon-core-publication-'))
+    const inputPath = resolve(temporaryDirectory, 'invalid-candidate.json')
+    const outputPath = resolve(temporaryDirectory, 'publication.sql')
+    writeFileSync(inputPath, JSON.stringify(dataset), 'utf8')
+
+    try {
+      const result = spawnSync(process.execPath, [
+        resolve('node_modules/tsx/dist/cli.mjs'),
+        resolve('scripts/data/publish-core-reference-data.ts'),
+        '--input', inputPath,
+        '--output', outputPath,
+      ], { cwd: process.cwd(), encoding: 'utf8', timeout: 30_000 })
+
+      expect(result.status).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toContain('기준데이터 검증 실패')
+      expect(existsSync(outputPath)).toBe(false)
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true })
+    }
   })
 
   it('battleDataIssues만 있는 후보는 기존 핵심 게시본을 교체하지 않는다', () => {

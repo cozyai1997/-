@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 
 import {
   analyzeSourceDiagnostics,
+  assertValidReferenceDataForPublication,
   collectEvolutionFormIntegrityIssues,
   type ReferenceDataset,
 } from '../../src/features/localization/reference-data-validation'
@@ -193,6 +194,7 @@ function jsonLiteral(value: unknown): string {
 }
 
 export function buildCoreReferenceSql(dataset: ReferenceDataset): string {
+  const validationReport = assertValidReferenceDataForPublication(dataset)
   const data: CoreReferenceData = prepareCoreReferenceData(dataset)
   const version = sqlLiteral(dataset.version)
   const rowCounts = Object.fromEntries(
@@ -212,7 +214,7 @@ insert into public.data_publications (
   version, status, source_manifest, row_counts, sha256, validation_report, validated_at
 ) values (
   ${version}, 'validated', ${jsonLiteral(dataset.sourceCommits)}, ${jsonLiteral(rowCounts)},
-  ${jsonLiteral(dataset.sha256)}, ${jsonLiteral({ valid: true, scope: 'core-registration-data' })}, now()
+  ${jsonLiteral(dataset.sha256)}, ${jsonLiteral(validationReport)}, now()
 )
 on conflict (version) do update set
   status = 'validated', source_manifest = excluded.source_manifest,
@@ -343,9 +345,10 @@ function main(): void {
   }
   const dataset = JSON.parse(readFileSync(resolve(input), 'utf8')) as ReferenceDataset
   const target = resolve(output)
+  const sql = buildCoreReferenceSql(dataset)
   mkdirSync(dirname(target), { recursive: true })
   const temporary = `${target}.tmp`
-  writeFileSync(temporary, buildCoreReferenceSql(dataset), 'utf8')
+  writeFileSync(temporary, sql, 'utf8')
   renameSync(temporary, target)
   process.stdout.write(`${target}\n`)
 }

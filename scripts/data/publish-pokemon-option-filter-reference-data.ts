@@ -6,10 +6,9 @@ import { pathToFileURL } from 'node:url'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 import {
+  assertValidReferenceDataForPublication,
   collectBattleDataIssues,
-  validateReferenceData,
   type ReferenceDataset,
-  type ValidationReport,
 } from '../../src/features/localization/reference-data-validation'
 
 const batchSize = 750
@@ -239,25 +238,6 @@ export function assertOptionFilterCandidate(dataset: ReferenceDataset): void {
   if (battleDataIssues.length > 0) throw new Error(battleDataIssues[0])
 }
 
-function firstValidationIssue(report: ValidationReport): string {
-  const missingKorean = report.missingKoreanFields[0]
-  if (missingKorean) return `${missingKorean.table}:${missingKorean.key}:${missingKorean.field}`
-  const brokenReference = report.brokenReferences[0]
-  if (brokenReference) return `${brokenReference.table}:${brokenReference.key}:${brokenReference.target}`
-  const countMismatch = report.countMismatches[0]
-  if (countMismatch) {
-    return `${countMismatch.table}:actual=${countMismatch.actual}:reported=${countMismatch.reported}:expected=${countMismatch.expected}`
-  }
-  if (report.manifestIssues[0]) return report.manifestIssues[0]
-  if (report.battleDataIssues[0]) return report.battleDataIssues[0]
-  const duplicate = report.duplicateKeys[0]
-  if (duplicate) return `${duplicate.table}:${duplicate.key}:duplicate`
-  const placeholder = report.placeholderIssues[0]
-  if (placeholder) return `${placeholder.table}:${placeholder.key}:${placeholder.field}:${placeholder.token}`
-  if (report.sourceDiagnosticIssues[0]) return report.sourceDiagnosticIssues[0]
-  return 'unknown'
-}
-
 export function prepareBattlePublicationRows(
   dataset: Pick<
     ReferenceDataset,
@@ -354,10 +334,7 @@ export async function publishPokemonOptionFilterReferenceData(
   formGigantamaxOptions: number
 }> {
   assertOptionFilterCandidate(dataset)
-  const validation = validateReferenceData(dataset)
-  if (!validation.valid) {
-    throw new Error(`기준데이터 검증 실패: ${firstValidationIssue(validation)}`)
-  }
+  assertValidReferenceDataForPublication(dataset)
 
   const { data: publication, error: publicationError } = await client
     .from('data_publications')

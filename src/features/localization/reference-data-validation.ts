@@ -190,6 +190,37 @@ const nonHpStatKeys = new Set<NonHpStatKey>([
 const statKeys = ['hp', 'attack', 'defense', 'special_attack', 'special_defense', 'speed'] as const
 const interpolationTokenPattern = /%(?:\d+\$)?[a-zA-Z]|\{[^{}\r\n]+\}/gu
 
+const reviewedMissingEvolutionTargetSourceAnchor = {
+  sourceCommits: {
+    cobblemon: 'd1b8094539f2dd23bd98c1a48293fac1f2010c16',
+    koreanLocalizationContent: '9e231c83211f17e9fbb9994ef777750f04e883aa',
+  },
+  sha256: {
+    evolutions: 'aececbd2841ccf662732c42c5eef4c2b5c3ec3e4041fa80fab1872d21b8f108f',
+    sourceManifest: 'd9f8a25fcfed05e8a5392c474c3d0b3c834ed6f1c8a1a417eded5d72071e0531',
+  },
+  rows: {
+    'milotic>megamilotic:233': {
+      fromSpeciesId: 'milotic',
+      fromFormId: null,
+      toSpeciesId: 'milotic',
+      toFormId: null,
+      conditionKo: '키스톤 사용; 원본에 대상 메가 폼이 없음',
+      target: 'forms:milotic-mega',
+    },
+    'milotic>megamilotic:234': {
+      fromSpeciesId: 'milotic',
+      fromFormId: null,
+      toSpeciesId: 'milotic',
+      toFormId: null,
+      conditionKo: '메가링 사용; 원본에 대상 메가 폼이 없음',
+      target: 'forms:milotic-mega',
+    },
+  },
+} as const
+
+type ReviewedMissingEvolutionKey = keyof typeof reviewedMissingEvolutionTargetSourceAnchor.rows
+
 function rowKey(table: KoreanFieldTable, row: Record<string, unknown>, index: number): string {
   if (typeof row.id === 'string' && row.id.trim()) return row.id
   if (table === 'evolutions') {
@@ -270,6 +301,41 @@ export function analyzeSourceDiagnostics(dataset: ReferenceDataset): {
       continue
     }
     const row = rows[0]
+    const reviewedRow = reviewedMissingEvolutionTargetSourceAnchor.rows[
+      diagnostic.key as ReviewedMissingEvolutionKey
+    ]
+    if (!reviewedRow) {
+      issues.push(`sourceDiagnostics:${diagnostic.key}:unreviewed`)
+      invalidDiagnosticKeys.add(diagnostic.key)
+    } else {
+      for (const [source, expected] of Object.entries(
+        reviewedMissingEvolutionTargetSourceAnchor.sourceCommits,
+      )) {
+        if (dataset.sourceCommits[source] !== expected) {
+          issues.push(`sourceDiagnostics:${diagnostic.key}:source-anchor:sourceCommit:${source}`)
+          invalidDiagnosticKeys.add(diagnostic.key)
+        }
+      }
+      for (const [source, expected] of Object.entries(
+        reviewedMissingEvolutionTargetSourceAnchor.sha256,
+      )) {
+        if (dataset.sha256[source] !== expected) {
+          issues.push(`sourceDiagnostics:${diagnostic.key}:source-anchor:sha256:${source}`)
+          invalidDiagnosticKeys.add(diagnostic.key)
+        }
+      }
+      if (
+        row.fromSpeciesId !== reviewedRow.fromSpeciesId
+        || (row.fromFormId ?? null) !== reviewedRow.fromFormId
+        || row.toSpeciesId !== reviewedRow.toSpeciesId
+        || (row.toFormId ?? null) !== reviewedRow.toFormId
+        || row.conditionKo !== reviewedRow.conditionKo
+        || diagnostic.target !== reviewedRow.target
+      ) {
+        issues.push(`sourceDiagnostics:${diagnostic.key}:row-signature`)
+        invalidDiagnosticKeys.add(diagnostic.key)
+      }
+    }
     const keyMatch = /^([^>]+)>mega([^:]+):\d+$/u.exec(diagnostic.key)
     if (!keyMatch || keyMatch[1] !== keyMatch[2]) {
       issues.push(`sourceDiagnostics:${diagnostic.key}:mega-target-contract`)
@@ -341,6 +407,9 @@ export function collectEvolutionFormIntegrityIssues(
     const toFormId = row.toFormId ?? `${row.toSpeciesId}-normal`
     const fromForm = formsById.get(fromFormId)
     const toForm = formsById.get(toFormId)
+    if (!fromForm) {
+      issues.push({ key, target: `forms:${fromFormId}` })
+    }
     if (fromForm && fromForm.speciesId !== row.fromSpeciesId) {
       issues.push({ key, target: `fromFormSpecies:${fromForm.speciesId}` })
     }
@@ -517,8 +586,6 @@ export function validateReferenceData(
     const key = row.id ?? `${row.fromSpeciesId}>${row.toSpeciesId}:${index}`
     addBrokenReference(brokenReferences, 'evolutions', key, 'species', row.fromSpeciesId, speciesIds)
     addBrokenReference(brokenReferences, 'evolutions', key, 'species', row.toSpeciesId, speciesIds)
-    addBrokenReference(brokenReferences, 'evolutions', key, 'forms', row.fromFormId, formIds)
-    addBrokenReference(brokenReferences, 'evolutions', key, 'forms', row.toFormId, formIds)
   })
   for (const issue of collectEvolutionFormIntegrityIssues(
     dataset,
@@ -616,6 +683,33 @@ export function validateReferenceData(
     sourceCommits: dataset.sourceCommits,
     sha256: dataset.sha256,
   }
+}
+
+export function firstValidationIssue(report: ValidationReport): string {
+  const missingKorean = report.missingKoreanFields[0]
+  if (missingKorean) return `${missingKorean.table}:${missingKorean.key}:${missingKorean.field}`
+  const duplicate = report.duplicateKeys[0]
+  if (duplicate) return `${duplicate.table}:${duplicate.key}:duplicate`
+  const placeholder = report.placeholderIssues[0]
+  if (placeholder) return `${placeholder.table}:${placeholder.key}:${placeholder.field}:${placeholder.token}`
+  if (report.sourceDiagnosticIssues[0]) return report.sourceDiagnosticIssues[0]
+  const brokenReference = report.brokenReferences[0]
+  if (brokenReference) return `${brokenReference.table}:${brokenReference.key}:${brokenReference.target}`
+  const countMismatch = report.countMismatches[0]
+  if (countMismatch) {
+    return `${countMismatch.table}:actual=${countMismatch.actual}:reported=${countMismatch.reported}:expected=${countMismatch.expected}`
+  }
+  if (report.manifestIssues[0]) return report.manifestIssues[0]
+  if (report.battleDataIssues[0]) return report.battleDataIssues[0]
+  return 'unknown'
+}
+
+export function assertValidReferenceDataForPublication(
+  dataset: ReferenceDataset,
+): ValidationReport {
+  const report = validateReferenceData(dataset)
+  if (!report.valid) throw new Error(`기준데이터 검증 실패: ${firstValidationIssue(report)}`)
+  return report
 }
 
 export function collectBattleDataIssues(

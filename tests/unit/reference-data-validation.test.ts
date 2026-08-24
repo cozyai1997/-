@@ -39,19 +39,46 @@ const fixtureBattleProfile: BattleDatasetProfile = {
   battleOnlyDiagnostics: 0,
 }
 
+const reviewedSourceCommits = {
+  cobblemon: 'd1b8094539f2dd23bd98c1a48293fac1f2010c16',
+  koreanLocalizationContent: '9e231c83211f17e9fbb9994ef777750f04e883aa',
+}
+const reviewedSourceHashes = {
+  evolutions: 'aececbd2841ccf662732c42c5eef4c2b5c3ec3e4041fa80fab1872d21b8f108f',
+  sourceManifest: 'd9f8a25fcfed05e8a5392c474c3d0b3c834ed6f1c8a1a417eded5d72071e0531',
+}
+
 function missingMegaFixture(): ReferenceDataset {
   const dataset = structuredClone(completeFixture) as ReferenceDataset
+  dataset.sourceCommits = reviewedSourceCommits
+  dataset.sha256 = reviewedSourceHashes
+  dataset.species[0] = {
+    ...dataset.species[0], id: 'milotic', nationalDexNumber: 350,
+    nameKo: '밀로틱', descriptionKo: '사랑 포켓몬이다.',
+  }
+  dataset.forms[0] = {
+    ...dataset.forms[0], id: 'milotic-normal', speciesId: 'milotic', nameKo: '기본 모습',
+  }
+  dataset.learnsets[0] = {
+    ...dataset.learnsets[0], speciesId: 'milotic', formId: 'milotic-normal',
+  }
+  dataset.formAbilities[0] = {
+    ...dataset.formAbilities[0], speciesId: 'milotic', formId: 'milotic-normal',
+  }
+  dataset.formTeraOptions = dataset.formTeraOptions.map((row) => ({
+    ...row, formId: 'milotic-normal',
+  }))
   dataset.evolutions = [{
-    id: 'eevee>megaeevee:0',
-    fromSpeciesId: 'eevee',
-    toSpeciesId: 'eevee',
-    conditionKo: '키스톤 사용',
+    id: 'milotic>megamilotic:233',
+    fromSpeciesId: 'milotic',
+    toSpeciesId: 'milotic',
+    conditionKo: '키스톤 사용; 원본에 대상 메가 폼이 없음',
   }]
   dataset.sourceDiagnostics = [{
     code: 'missing-evolution-target-form',
     table: 'evolutions',
-    key: 'eevee>megaeevee:0',
-    target: 'forms:eevee-mega',
+    key: 'milotic>megamilotic:233',
+    target: 'forms:milotic-mega',
   }]
   dataset.reportedCounts.evolutions = 1
   return dataset
@@ -179,18 +206,18 @@ describe('한국어 기준 데이터 공개 검증', () => {
   it.each([
     [
       'orphan',
-      (dataset: ReferenceDataset) => { dataset.sourceDiagnostics![0].key = 'eevee>megaeevee:999' },
-      'sourceDiagnostics:eevee>megaeevee:999:evolution-row-count=0',
+      (dataset: ReferenceDataset) => { dataset.sourceDiagnostics![0].key = 'milotic>megamilotic:999' },
+      'sourceDiagnostics:milotic>megamilotic:999:evolution-row-count=0',
     ],
     [
       'fabricated target',
-      (dataset: ReferenceDataset) => { dataset.sourceDiagnostics![0].target = 'forms:eevee-gmax' },
-      'sourceDiagnostics:eevee>megaeevee:0:target=forms:eevee-gmax:expected=forms:eevee-mega',
+      (dataset: ReferenceDataset) => { dataset.sourceDiagnostics![0].target = 'forms:milotic-gmax' },
+      'sourceDiagnostics:milotic>megamilotic:233:target=forms:milotic-gmax:expected=forms:milotic-mega',
     ],
     [
       'duplicate',
       (dataset: ReferenceDataset) => { dataset.sourceDiagnostics!.push({ ...dataset.sourceDiagnostics![0] }) },
-      'sourceDiagnostics:eevee>megaeevee:0:duplicate',
+      'sourceDiagnostics:milotic>megamilotic:233:duplicate',
     ],
     [
       'source mismatch',
@@ -202,7 +229,7 @@ describe('한국어 기준 데이터 공개 검증', () => {
           target: 'forms:pikachu-mega',
         }
       },
-      'sourceDiagnostics:pikachu>megapikachu:0:source-species=eevee:raw=pikachu',
+      'sourceDiagnostics:pikachu>megapikachu:0:source-species=milotic:raw=pikachu',
     ],
     [
       'metadata',
@@ -211,7 +238,7 @@ describe('한국어 기준 데이터 공개 검증', () => {
         diagnostic.code = 'fabricated-code'
         diagnostic.table = 'forms'
       },
-      'sourceDiagnostics:eevee>megaeevee:0:metadata',
+      'sourceDiagnostics:milotic>megamilotic:233:metadata',
     ],
   ] as const)('%s source diagnostic 변조를 거부한다', (_label, tamper, issue) => {
     const dataset = missingMegaFixture()
@@ -227,9 +254,9 @@ describe('한국어 기준 데이터 공개 검증', () => {
     const dataset = missingMegaFixture()
     dataset.forms.push({
       ...dataset.forms[0],
-      id: 'eevee-mega',
-      baseFormId: 'eevee-normal',
-      nameKo: '메가이브이',
+      id: 'milotic-mega',
+      baseFormId: 'milotic-normal',
+      nameKo: '메가밀로틱',
       isBattleOnly: true,
     })
     dataset.reportedCounts.forms = 2
@@ -238,7 +265,53 @@ describe('한국어 기준 데이터 공개 검증', () => {
 
     expect(report.valid).toBe(false)
     expect(report.sourceDiagnosticIssues).toContain(
-      'sourceDiagnostics:eevee>megaeevee:0:target-present=forms:eevee-mega',
+      'sourceDiagnostics:milotic>megamilotic:233:target-present=forms:milotic-mega',
+    )
+  })
+
+  it('내부 구조가 맞아도 검토 허용 목록에 없는 누락 메가 진단은 거부한다', () => {
+    const dataset = missingMegaFixture()
+    dataset.evolutions[0] = {
+      id: 'eevee>megaeevee:0', fromSpeciesId: 'eevee', toSpeciesId: 'eevee',
+      conditionKo: '키스톤 사용',
+    }
+    dataset.sourceDiagnostics![0] = {
+      code: 'missing-evolution-target-form', table: 'evolutions',
+      key: 'eevee>megaeevee:0', target: 'forms:eevee-mega',
+    }
+
+    const report = validateMissingMegaFixture(dataset)
+
+    expect(report.valid).toBe(false)
+    expect(report.sourceDiagnosticIssues).toContain('sourceDiagnostics:eevee>megaeevee:0:unreviewed')
+  })
+
+  it.each([
+    ['Cobblemon commit', (dataset: ReferenceDataset) => { dataset.sourceCommits.cobblemon = '0'.repeat(40) }, 'sourceCommit:cobblemon'],
+    ['Korean localization commit', (dataset: ReferenceDataset) => { dataset.sourceCommits.koreanLocalizationContent = '0'.repeat(40) }, 'sourceCommit:koreanLocalizationContent'],
+    ['raw evolution hash', (dataset: ReferenceDataset) => { dataset.sha256.evolutions = '0'.repeat(64) }, 'sha256:evolutions'],
+    ['source manifest hash', (dataset: ReferenceDataset) => { dataset.sha256.sourceManifest = '0'.repeat(64) }, 'sha256:sourceManifest'],
+  ] as const)('%s가 바뀐 누락 진단은 검토 앵커 불일치로 거부한다', (_label, tamper, anchor) => {
+    const dataset = missingMegaFixture()
+    tamper(dataset)
+
+    const report = validateMissingMegaFixture(dataset)
+
+    expect(report.valid).toBe(false)
+    expect(report.sourceDiagnosticIssues).toContain(
+      `sourceDiagnostics:milotic>megamilotic:233:source-anchor:${anchor}`,
+    )
+  })
+
+  it('검토된 원본 행의 조건 서명이 바뀌면 누락 진단을 거부한다', () => {
+    const dataset = missingMegaFixture()
+    dataset.evolutions[0].conditionKo = '키스톤 사용'
+
+    const report = validateMissingMegaFixture(dataset)
+
+    expect(report.valid).toBe(false)
+    expect(report.sourceDiagnosticIssues).toContain(
+      'sourceDiagnostics:milotic>megamilotic:233:row-signature',
     )
   })
 
@@ -289,6 +362,29 @@ describe('한국어 기준 데이터 공개 검증', () => {
     expect(report.valid).toBe(false)
     expect(report.brokenReferences).toContainEqual({
       table: 'evolutions', key: 'eevee>vaporeon:1', target: 'forms:vaporeon-normal',
+    })
+  })
+
+  it('암시적 출발 기본 폼이 실제로 없으면 거부한다', () => {
+    const dataset = structuredClone(completeFixture) as ReferenceDataset
+    dataset.species.push({
+      id: 'vaporeon', nationalDexNumber: 134, nameKo: '샤미드', descriptionKo: '물 포켓몬이다.',
+    })
+    dataset.evolutions = [{
+      id: 'vaporeon>eevee:2', fromSpeciesId: 'vaporeon', toSpeciesId: 'eevee',
+      conditionKo: '특수 조건',
+    }]
+    Object.assign(dataset.reportedCounts, { species: 2, evolutions: 1 })
+
+    const report = validateReferenceData(dataset, {
+      expectedRowCounts: { ...fixtureCounts, species: 2, evolutions: 1 },
+      expectedBattleRowCounts: fixtureBattleCounts,
+      expectedBattleDatasetProfile: fixtureBattleProfile,
+    })
+
+    expect(report.valid).toBe(false)
+    expect(report.brokenReferences).toContainEqual({
+      table: 'evolutions', key: 'vaporeon>eevee:2', target: 'forms:vaporeon-normal',
     })
   })
 
