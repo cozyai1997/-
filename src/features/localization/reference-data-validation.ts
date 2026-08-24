@@ -1,4 +1,5 @@
 import { requiredKoreanFields, type KoreanFieldTable } from './required-fields'
+import type { NonHpStatKey, StatBlock } from '../stats/types'
 
 export type ExpectedRowCounts = {
   types: number
@@ -14,29 +15,60 @@ export type ExpectedRowCounts = {
   typeMatchups: number
 }
 
-type KoreanNamedRow = {
+export type KoreanNamedRow = {
   id: string
   nameKo: string
   descriptionKo?: string
+}
+
+export type ReferenceFormRow = KoreanNamedRow & {
+  speciesId: string
+  baseFormId: string | null
+  primaryTypeId: string | null
+  secondaryTypeId: string | null
+  baseStats: StatBlock
+  isBattleOnly: boolean
+  aspects: string[]
+}
+
+export type ReferenceNatureRow = KoreanNamedRow & {
+  increasedStat: NonHpStatKey | null
+  decreasedStat: NonHpStatKey | null
+}
+
+export type ReferenceTeraTypeRow = {
+  id: string
+  nameKo: string
+  referenceTypeId: string | null
+  sortOrder: number
+}
+
+export type ReferenceFormTeraOptionRow = { formId: string; teraTypeId: string }
+
+export type ReferenceFormGigantamaxOptionRow = {
+  sourceFormId: string
+  gigantamaxFormId: string
+}
+
+export type BattleReportedCounts = {
+  teraTypes: number
+  formTeraOptions: number
+  formGigantamaxOptions: number
 }
 
 export type ReferenceDataset = {
   version: string
   sourceCommits: Record<string, string>
   sha256: Record<string, string>
-  reportedCounts: ExpectedRowCounts
+  battleOnlyDiagnostics: string[]
+  reportedCounts: ExpectedRowCounts & BattleReportedCounts
   types: KoreanNamedRow[]
   species: Array<KoreanNamedRow & {
     nationalDexNumber: number
     primaryTypeId?: string | null
     secondaryTypeId?: string | null
   }>
-  forms: Array<KoreanNamedRow & {
-    speciesId: string
-    baseFormId: string | null
-    primaryTypeId?: string | null
-    secondaryTypeId?: string | null
-  }>
+  forms: ReferenceFormRow[]
   abilities: KoreanNamedRow[]
   moves: Array<KoreanNamedRow & {
     typeId: string
@@ -69,7 +101,10 @@ export type ReferenceDataset = {
     slot: string
     isHidden: boolean
   }>
-  natures: KoreanNamedRow[]
+  natures: ReferenceNatureRow[]
+  teraTypes: ReferenceTeraTypeRow[]
+  formTeraOptions: ReferenceFormTeraOptionRow[]
+  formGigantamaxOptions: ReferenceFormGigantamaxOptionRow[]
   typeMatchups: Array<{
     attackingTypeId: string
     defendingTypeId: string

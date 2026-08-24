@@ -4,12 +4,20 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parse } from 'csv-parse/sync'
 import type { ReferenceDataset } from '../../src/features/localization/reference-data-validation'
+import {
+  buildFormGigantamaxOptions,
+  buildFormTeraOptions,
+  buildTeraTypes,
+  normalizeNatureRow,
+  resolveInheritedBaseStats,
+} from './normalize-pokemon-battle-data'
 
 type CsvRow = Record<string, string>
 type Localization = Record<string, string>
 type NameLookups = { items?: Map<string, string>; moves?: Map<string, string> }
 
 type FormSourceRow = Pick<CsvRow, 'FormID' | 'SpeciesID' | 'BaseFormID' | 'FormKO' | 'Type1' | 'Type2'>
+  & Partial<Pick<CsvRow, 'FormEN' | 'BaseHP' | 'BaseAtk' | 'BaseDef' | 'BaseSpA' | 'BaseSpD' | 'BaseSpe' | 'BattleOnly'>>
 type MoveSourceRow = Pick<CsvRow, 'MoveID' | 'NameKO' | 'Type' | 'Category' | 'Power' | 'Accuracy' | 'PP'>
 type LearnsetSourceRow = Pick<CsvRow, 'SpeciesID' | 'FormID' | 'MoveID' | 'SourceType' | 'SourceValue' | 'MinLevel'>
 type FormAbilitySourceRow = Pick<CsvRow, 'FormID' | 'SpeciesID' | 'AbilityID' | 'Slot' | 'Hidden'>
@@ -62,6 +70,19 @@ function nullableInteger(value: string): number | null {
   return parsed
 }
 
+function requiredInteger(value: string, field: string): number {
+  const parsed = nullableInteger(value)
+  if (parsed === null) throw new Error(`비어 있는 ${field} 원본 값입니다`)
+  return parsed
+}
+
+function requiredBoolean(value: string, field: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'true') return true
+  if (normalized === 'false') return false
+  throw new Error(`지원하지 않는 ${field} 원본 값입니다: ${value}`)
+}
+
 export function normalizeDamageClass(value: string): 'physical' | 'special' | 'status' {
   const normalized = value.trim().toLowerCase()
   if (normalized === 'physical' || normalized === 'special' || normalized === 'status') {
@@ -88,6 +109,16 @@ export function normalizeFormRow(row: FormSourceRow) {
     nameKo: row.FormKO,
     primaryTypeId: row.Type1 || null,
     secondaryTypeId: row.Type2 || null,
+    baseStats: {
+      hp: requiredInteger(row.BaseHP ?? '0', 'BaseHP'),
+      attack: requiredInteger(row.BaseAtk ?? '0', 'BaseAtk'),
+      defense: requiredInteger(row.BaseDef ?? '0', 'BaseDef'),
+      special_attack: requiredInteger(row.BaseSpA ?? '0', 'BaseSpA'),
+      special_defense: requiredInteger(row.BaseSpD ?? '0', 'BaseSpD'),
+      speed: requiredInteger(row.BaseSpe ?? '0', 'BaseSpe'),
+    },
+    isBattleOnly: requiredBoolean(row.BattleOnly ?? 'False', 'BattleOnly'),
+    aspects: [],
   }
 }
 
@@ -218,6 +249,7 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
     localization: join(cacheRoot, 'ko_kr.json'),
     meta: join(cacheRoot, 'meta.json'),
     sourceManifest: join(seedRoot, 'source_manifest.json'),
+    pokemonBySlug: join(cacheRoot, 'pokemon-by-slug'),
   }
   const localization = JSON.parse(readFileSync(paths.localization, 'utf8')) as Localization
   const meta = JSON.parse(readFileSync(paths.meta, 'utf8')) as {
@@ -253,7 +285,43 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
     nameKo: localized(localization, `cobblemon.species.${row.SpeciesID}.name`, row.NameKO),
     descriptionKo: localized(localization, `cobblemon.species.${row.SpeciesID}.desc`, ''),
   }))
-  const forms = formRows.map((row) => normalizeFormRow(row as FormSourceRow))
+  const pokemonSources = new Map(speciesRows.map((row) => [
+    row.SpeciesID,
+    JSON.parse(readFileSync(join(paths.pokemonBySlug, `${row.SpeciesID}.json`), 'utf8')) as {
+      baseStats: Record<string, unknown>
+      forms?: Array<{ name: string; aspects?: string[]; battleOnly?: boolean }>
+    },
+  ]))
+  const battleOnlyDiagnostics: string[] = []
+  const forms = resolveInheritedBaseStats(formRows.map((row) => {
+    const csv = row as FormSourceRow
+    const source = pokemonSources.get(csv.SpeciesID)
+    if (!source) throw new Error(`forms:${csv.FormID}:missing-species-source`)
+    if (csv.FormEN === 'Normal') {
+      const stats = source.baseStats
+      return {
+        ...normalizeFormRow(csv),
+        baseStats: {
+          hp: requiredInteger(String(stats.hp ?? ''), 'raw.baseStats.hp'),
+          attack: requiredInteger(String(stats.attack ?? ''), 'raw.baseStats.attack'),
+          defense: requiredInteger(String(stats.defence ?? ''), 'raw.baseStats.defence'),
+          special_attack: requiredInteger(String(stats.special_attack ?? ''), 'raw.baseStats.special_attack'),
+          special_defense: requiredInteger(String(stats.special_defence ?? ''), 'raw.baseStats.special_defence'),
+          speed: requiredInteger(String(stats.speed ?? ''), 'raw.baseStats.speed'),
+        },
+        aspects: [],
+      }
+    }
+    const matches = source.forms?.filter((form) => form.name === csv.FormEN) ?? []
+    if (matches.length !== 1) throw new Error(`forms:${csv.FormID}:raw-form-match`)
+    const raw = matches[0]
+    const csvBattleOnly = requiredBoolean(csv.BattleOnly ?? 'False', 'BattleOnly')
+    if (typeof raw.battleOnly !== 'boolean') throw new Error(`forms:${csv.FormID}:raw-battle-only-missing`)
+    if (raw.battleOnly !== csvBattleOnly) {
+      battleOnlyDiagnostics.push(`forms:${csv.FormID}:battle-only:csv=${csvBattleOnly}:raw=${raw.battleOnly}`)
+    }
+    return { ...normalizeFormRow(csv), isBattleOnly: raw.battleOnly, aspects: raw.aspects ?? [] }
+  }))
   const abilities = abilityRows.map((row) => ({
     id: row.AbilityID,
     nameKo: requiredLocalized(localization, `cobblemon.ability.${row.AbilityID}`),
@@ -279,7 +347,12 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
     }).text,
   }))
   const formAbilities = formAbilityRows.map((row) => normalizeFormAbilityRow(row as FormAbilitySourceRow))
-  const natures = natureRows.map((row) => ({ id: row.NatureID, nameKo: row.NameKO }))
+  const natures = natureRows.map((row) => normalizeNatureRow({
+    id: row.NatureID,
+    nameKo: row.NameKO,
+    UpStat: row.UpStat,
+    DownStat: row.DownStat,
+  }))
   const typeMatchups = matchupRows.map((row) => ({
     attackingTypeId: row.AttackType,
     defendingTypeId: row.DefenseType,
@@ -297,7 +370,16 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
     formAbilities: formAbilities.length,
     natures: natures.length,
     typeMatchups: typeMatchups.length,
+    teraTypes: 0,
+    formTeraOptions: 0,
+    formGigantamaxOptions: 0,
   }
+  const teraTypes = buildTeraTypes(types)
+  const formTeraOptions = buildFormTeraOptions(forms, teraTypes)
+  const formGigantamaxOptions = buildFormGigantamaxOptions(forms)
+  actualCounts.teraTypes = teraTypes.length
+  actualCounts.formTeraOptions = formTeraOptions.length
+  actualCounts.formGigantamaxOptions = formGigantamaxOptions.length
 
   return {
     version: `${sourceManifest.target_pack}+${sourceManifest.base_game_data}`,
@@ -306,8 +388,11 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
       koreanLocalizationContent: fileHash(paths.localization, 'sha1'),
     },
     sha256: Object.fromEntries(
-      Object.entries(paths).map(([name, path]) => [name, fileHash(path, 'sha256')]),
+      Object.entries(paths)
+        .filter(([name]) => name !== 'pokemonBySlug')
+        .map(([name, path]) => [name, fileHash(path, 'sha256')]),
     ),
+    battleOnlyDiagnostics,
     reportedCounts: actualCounts,
     types,
     species,
@@ -320,6 +405,9 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
     formAbilities,
     natures,
     typeMatchups,
+    teraTypes,
+    formTeraOptions,
+    formGigantamaxOptions,
   }
 }
 

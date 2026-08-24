@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   localizeEvolutionCondition,
   localizeLearnsetCondition,
+  normalizeFormRow,
 } from '../../scripts/data/import-reference-data'
 
 describe('Cobbleverse 원본 조건 한국어 정규화', () => {
@@ -33,5 +34,34 @@ describe('Cobbleverse 원본 조건 한국어 정규화', () => {
     ['form_change', '', '폼 변경 시 습득'],
   ])('%s 습득 경로를 한국어로 바꾼다', (sourceType, sourceValue, expected) => {
     expect(localizeLearnsetCondition(sourceType, sourceValue)).toBe(expected)
+  })
+
+  it('폼 CSV의 전투 원본 필드를 정규화한다', () => {
+    expect(normalizeFormRow({
+      FormID: 'venusaur-gmax',
+      SpeciesID: 'venusaur',
+      BaseFormID: 'venusaur-normal',
+      FormKO: '거다이맥스',
+      FormEN: 'Gmax',
+      Type1: 'grass',
+      Type2: 'poison',
+      BaseHP: '0',
+      BaseAtk: '0',
+      BaseDef: '0',
+      BaseSpA: '0',
+      BaseSpD: '0',
+      BaseSpe: '0',
+      BattleOnly: 'True',
+    })).toEqual({
+      id: 'venusaur-gmax',
+      speciesId: 'venusaur',
+      baseFormId: 'venusaur-normal',
+      nameKo: '거다이맥스',
+      primaryTypeId: 'grass',
+      secondaryTypeId: 'poison',
+      baseStats: { hp: 0, attack: 0, defense: 0, special_attack: 0, special_defense: 0, speed: 0 },
+      isBattleOnly: true,
+      aspects: [],
+    })
   })
 })

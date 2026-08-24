@@ -7,6 +7,7 @@
   "sha256": {
     "dataset": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
+  "battleOnlyDiagnostics": [],
   "reportedCounts": {
     "types": 1,
     "species": 1,
@@ -18,7 +19,10 @@
     "evolutions": 0,
     "formAbilities": 1,
     "natures": 1,
-    "typeMatchups": 1
+    "typeMatchups": 1,
+    "teraTypes": 2,
+    "formTeraOptions": 2,
+    "formGigantamaxOptions": 0
   },
   "types": [
     { "id": "normal", "nameKo": "노말" }
@@ -32,7 +36,7 @@
     }
   ],
   "forms": [
-    { "id": "eevee-normal", "speciesId": "eevee", "baseFormId": null, "nameKo": "일반", "primaryTypeId": "normal" }
+    { "id": "eevee-normal", "speciesId": "eevee", "baseFormId": null, "nameKo": "일반", "primaryTypeId": "normal", "secondaryTypeId": null, "baseStats": { "hp": 55, "attack": 55, "defense": 50, "special_attack": 45, "special_defense": 65, "speed": 55 }, "isBattleOnly": false, "aspects": [] }
   ],
   "abilities": [
     { "id": "adaptability", "nameKo": "적응력", "descriptionKo": "자신과 같은 타입 기술의 위력이 올라간다." }
@@ -51,8 +55,17 @@
     { "formId": "eevee-normal", "speciesId": "eevee", "abilityId": "adaptability", "slot": "first", "isHidden": false }
   ],
   "natures": [
-    { "id": "hardy", "nameKo": "노력" }
+    { "id": "hardy", "nameKo": "노력", "increasedStat": null, "decreasedStat": null }
   ],
+  "teraTypes": [
+    { "id": "normal", "nameKo": "노말", "referenceTypeId": "normal", "sortOrder": 0 },
+    { "id": "stellar", "nameKo": "스텔라", "referenceTypeId": null, "sortOrder": 19 }
+  ],
+  "formTeraOptions": [
+    { "formId": "eevee-normal", "teraTypeId": "normal" },
+    { "formId": "eevee-normal", "teraTypeId": "stellar" }
+  ],
+  "formGigantamaxOptions": [],
   "typeMatchups": [
     { "attackingTypeId": "normal", "defendingTypeId": "normal", "multiplier": 1 }
   ]
