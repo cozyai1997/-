@@ -908,7 +908,9 @@ async function registerPokemon(
 
   await expect(page.getByText('4 / 7단계')).toBeVisible()
   for (const statName of ['HP', '공격', '방어', '특수공격', '특수방어', '스피드']) {
-    await page.getByLabel(`${statName} 적용 IV (왕관 보정 포함)`).fill('31')
+    await page
+      .getByLabel(`${statName} 적용 IV (왕관 보정 포함)`, { exact: true })
+      .fill('31')
   }
   await expect(page.getByLabel('HP 종족값')).toHaveValue('130')
   await expect(page.getByLabel('공격 종족값', { exact: true })).toHaveValue('65')
