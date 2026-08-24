@@ -24,6 +24,16 @@ type FormSourceRow = Pick<CsvRow, 'FormID' | 'SpeciesID' | 'BaseFormID' | 'FormK
 type MoveSourceRow = Pick<CsvRow, 'MoveID' | 'NameKO' | 'Type' | 'Category' | 'Power' | 'Accuracy' | 'PP'>
 type LearnsetSourceRow = Pick<CsvRow, 'SpeciesID' | 'FormID' | 'MoveID' | 'SourceType' | 'SourceValue' | 'MinLevel'>
 type FormAbilitySourceRow = Pick<CsvRow, 'FormID' | 'SpeciesID' | 'AbilityID' | 'Slot' | 'Hidden'>
+type RawEvolution = {
+  variant: string
+  requirementText?: string[]
+  result?: { raw?: string; aspectTokens?: string[] }
+}
+type PokemonSource = {
+  baseStats: Record<string, unknown>
+  forms?: Array<{ name: string; aspects?: string[]; battleOnly?: boolean }>
+  evolutions?: RawEvolution | RawEvolution[]
+}
 
 const itemNames = new Map<string, string>([
   ['Thunder Stone', '천둥의돌'],
@@ -148,6 +158,36 @@ function requiredLocalized(localization: Localization, key: string): string {
 function koreanValue(value: string | undefined): string | null {
   const trimmed = value?.trim() ?? ''
   return hangulPattern.test(trimmed) ? trimmed : null
+}
+
+function resolveRawSameSpeciesEvolutionTargetForm(
+  source: PokemonSource,
+  row: CsvRow,
+  evolutionId: string,
+  formIds: ReadonlySet<string>,
+): string {
+  const rawEvolutions = Array.isArray(source.evolutions)
+    ? source.evolutions
+    : source.evolutions ? [source.evolutions] : []
+  const matches = rawEvolutions.filter((evolution) => (
+    evolution.variant === row.Method
+    && (evolution.requirementText ?? []).join('; ') === row.Condition
+  ))
+  const resolvedTargets = new Set<string>()
+  for (const match of matches) {
+    for (const token of match.result?.aspectTokens ?? []) {
+      const value = token.includes('=') ? token.slice(token.indexOf('=') + 1).trim().toLowerCase() : ''
+      const target = value ? `${row.ToSpeciesID}-${value}` : ''
+      if (target && formIds.has(target)) resolvedTargets.add(target)
+    }
+    const rawResult = match.result?.raw?.trim().toLowerCase() ?? ''
+    const directTarget = rawResult && !/\s/u.test(rawResult) ? `${row.ToSpeciesID}-${rawResult}` : ''
+    if (directTarget && formIds.has(directTarget)) resolvedTargets.add(directTarget)
+  }
+  if (resolvedTargets.size !== 1) {
+    throw new Error(`evolutions:${evolutionId}:raw-target-form-match=${resolvedTargets.size}`)
+  }
+  return [...resolvedTargets][0]
 }
 
 function localizedFormName(
@@ -531,10 +571,7 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
   }))
   const pokemonSources = new Map(speciesRows.map((row) => [
     row.SpeciesID,
-    JSON.parse(readFileSync(join(paths.pokemonBySlug, `${row.SpeciesID}.json`), 'utf8')) as {
-      baseStats: Record<string, unknown>
-      forms?: Array<{ name: string; aspects?: string[]; battleOnly?: boolean }>
-    },
+    JSON.parse(readFileSync(join(paths.pokemonBySlug, `${row.SpeciesID}.json`), 'utf8')) as PokemonSource,
   ]))
   const battleOnlyDiagnostics: string[] = []
   const speciesNamesKo = new Map(species.map((row) => [row.id, row.nameKo]))
@@ -599,6 +636,17 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
     const sameSpeciesMegaFormId = `${row.FromSpeciesID}-mega`
     const targetsSameSpeciesMegaForm = !speciesIds.has(row.ToSpeciesID)
       && row.ToSpeciesID === `mega${row.FromSpeciesID}`
+    let targetsSameSpeciesForm: string | null = null
+    if (row.FromSpeciesID === row.ToSpeciesID) {
+      const source = pokemonSources.get(row.FromSpeciesID)
+      if (!source) throw new Error(`evolutions:${evolutionId}:missing-species-source`)
+      targetsSameSpeciesForm = resolveRawSameSpeciesEvolutionTargetForm(
+        source,
+        row,
+        evolutionId,
+        formIds,
+      )
+    }
     if (targetsSameSpeciesMegaForm && !formIds.has(sameSpeciesMegaFormId)) {
       sourceDiagnostics.push({
         code: 'missing-evolution-target-form',
@@ -613,7 +661,7 @@ export function importReferenceData(sourceRoot: string): ReferenceDataset {
       toSpeciesId: targetsSameSpeciesMegaForm ? row.FromSpeciesID : row.ToSpeciesID,
       toFormId: targetsSameSpeciesMegaForm && formIds.has(sameSpeciesMegaFormId)
         ? sameSpeciesMegaFormId
-        : null,
+        : targetsSameSpeciesForm,
       conditionKo: `${localizeEvolutionConditionForPublication(row.Condition, row.Method, {
         items: itemNameLookup,
         moves: moveNameLookup,

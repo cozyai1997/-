@@ -145,6 +145,7 @@ export type ValidationReport = {
   duplicateKeys: Array<{ table: string; key: string }>
   placeholderIssues: Array<{ table: string; key: string; field: string; token: string }>
   sourceDiagnostics: SourceDiagnostic[]
+  sourceDiagnosticIssues: string[]
   sourceCommits: Record<string, string>
   sha256: Record<string, string>
 }
@@ -231,6 +232,138 @@ function collectDuplicateKeys<T>(
   })
 }
 
+export function analyzeSourceDiagnostics(dataset: ReferenceDataset): {
+  issues: string[]
+  trustedMissingTargetKeys: Set<string>
+  trustedDiagnostics: SourceDiagnostic[]
+} {
+  const issues: string[] = []
+  const diagnostics = dataset.sourceDiagnostics ?? []
+  const formsById = new Map(dataset.forms.map((row) => [row.id, row]))
+  const evolutionsById = new Map<string, ReferenceDataset['evolutions']>()
+  dataset.evolutions.forEach((row) => {
+    if (!row.id) return
+    evolutionsById.set(row.id, [...(evolutionsById.get(row.id) ?? []), row])
+  })
+  const diagnosticCounts = new Map<string, number>()
+  const invalidDiagnosticKeys = new Set<string>()
+
+  for (const diagnostic of diagnostics) {
+    diagnosticCounts.set(diagnostic.key, (diagnosticCounts.get(diagnostic.key) ?? 0) + 1)
+  }
+  for (const [key, count] of diagnosticCounts) {
+    if (count > 1) {
+      issues.push(`sourceDiagnostics:${key}:duplicate`)
+      invalidDiagnosticKeys.add(key)
+    }
+  }
+
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.code !== 'missing-evolution-target-form' || diagnostic.table !== 'evolutions') {
+      issues.push(`sourceDiagnostics:${diagnostic.key}:metadata`)
+      invalidDiagnosticKeys.add(diagnostic.key)
+    }
+    const rows = evolutionsById.get(diagnostic.key) ?? []
+    if (rows.length !== 1) {
+      issues.push(`sourceDiagnostics:${diagnostic.key}:evolution-row-count=${rows.length}`)
+      invalidDiagnosticKeys.add(diagnostic.key)
+      continue
+    }
+    const row = rows[0]
+    const keyMatch = /^([^>]+)>mega([^:]+):\d+$/u.exec(diagnostic.key)
+    if (!keyMatch || keyMatch[1] !== keyMatch[2]) {
+      issues.push(`sourceDiagnostics:${diagnostic.key}:mega-target-contract`)
+      invalidDiagnosticKeys.add(diagnostic.key)
+      continue
+    }
+    const rawSourceSpeciesId = keyMatch[1]
+    const expectedTargetFormId = `${rawSourceSpeciesId}-mega`
+    const expectedTarget = `forms:${expectedTargetFormId}`
+    if (row.fromSpeciesId !== rawSourceSpeciesId) {
+      issues.push(`sourceDiagnostics:${diagnostic.key}:source-species=${row.fromSpeciesId}:raw=${rawSourceSpeciesId}`)
+      invalidDiagnosticKeys.add(diagnostic.key)
+    }
+    if (row.toSpeciesId !== rawSourceSpeciesId) {
+      issues.push(`sourceDiagnostics:${diagnostic.key}:target-species=${row.toSpeciesId}:expected=${rawSourceSpeciesId}`)
+      invalidDiagnosticKeys.add(diagnostic.key)
+    }
+    if (row.toFormId) {
+      issues.push(`sourceDiagnostics:${diagnostic.key}:resolved-target-form=${row.toFormId}`)
+      invalidDiagnosticKeys.add(diagnostic.key)
+    }
+    if (diagnostic.target !== expectedTarget) {
+      issues.push(`sourceDiagnostics:${diagnostic.key}:target=${diagnostic.target}:expected=${expectedTarget}`)
+      invalidDiagnosticKeys.add(diagnostic.key)
+    }
+    if (formsById.has(expectedTargetFormId)) {
+      issues.push(`sourceDiagnostics:${diagnostic.key}:target-present=${expectedTarget}`)
+      invalidDiagnosticKeys.add(diagnostic.key)
+    }
+  }
+
+  const expectedMissingTargets = new Map<string, string>()
+  dataset.evolutions.forEach((row) => {
+    if (!row.id || row.toFormId || row.fromSpeciesId !== row.toSpeciesId) return
+    const match = /^([^>]+)>mega([^:]+):\d+$/u.exec(row.id)
+    if (!match || match[1] !== match[2] || row.fromSpeciesId !== match[1]) return
+    const expectedTarget = `forms:${match[1]}-mega`
+    if (!formsById.has(`${match[1]}-mega`)) expectedMissingTargets.set(row.id, expectedTarget)
+  })
+  for (const [key, target] of expectedMissingTargets) {
+    const matches = diagnostics.filter((diagnostic) => diagnostic.key === key && diagnostic.target === target)
+    if (matches.length === 0) {
+      issues.push(`sourceDiagnostics:${key}:missing`)
+      invalidDiagnosticKeys.add(key)
+    }
+  }
+
+  const trustedDiagnostics = diagnostics.filter((diagnostic) => (
+    expectedMissingTargets.get(diagnostic.key) === diagnostic.target
+    && diagnosticCounts.get(diagnostic.key) === 1
+    && !invalidDiagnosticKeys.has(diagnostic.key)
+  ))
+  return {
+    issues: [...new Set(issues)],
+    trustedMissingTargetKeys: new Set(trustedDiagnostics.map((diagnostic) => diagnostic.key)),
+    trustedDiagnostics,
+  }
+}
+
+export function collectEvolutionFormIntegrityIssues(
+  dataset: ReferenceDataset,
+  trustedMissingTargetKeys: ReadonlySet<string>,
+): Array<{ key: string; target: string }> {
+  const formsById = new Map(dataset.forms.map((row) => [row.id, row]))
+  const issues: Array<{ key: string; target: string }> = []
+  dataset.evolutions.forEach((row, index) => {
+    const key = row.id ?? `${row.fromSpeciesId}>${row.toSpeciesId}:${index}`
+    const fromFormId = row.fromFormId ?? `${row.fromSpeciesId}-normal`
+    const toFormId = row.toFormId ?? `${row.toSpeciesId}-normal`
+    const fromForm = formsById.get(fromFormId)
+    const toForm = formsById.get(toFormId)
+    if (fromForm && fromForm.speciesId !== row.fromSpeciesId) {
+      issues.push({ key, target: `fromFormSpecies:${fromForm.speciesId}` })
+    }
+    if (toForm && toForm.speciesId !== row.toSpeciesId) {
+      issues.push({ key, target: `formSpecies:${toForm.speciesId}` })
+    }
+    if (!toForm && !row.toFormId && !trustedMissingTargetKeys.has(key)) {
+      issues.push({ key, target: `forms:${toFormId}` })
+      return
+    }
+    if (row.fromSpeciesId !== row.toSpeciesId || trustedMissingTargetKeys.has(key)) return
+    if (
+      !row.toFormId
+      || toFormId === fromFormId
+      || toFormId === `${row.toSpeciesId}-normal`
+      || toForm?.baseFormId === null
+    ) {
+      issues.push({ key, target: `sameSpeciesDefaultForm:${toFormId}` })
+    }
+  })
+  return issues
+}
+
 export function validateReferenceData(
   dataset: ReferenceDataset,
   options: {
@@ -254,6 +387,8 @@ export function validateReferenceData(
   const duplicateKeys: ValidationReport['duplicateKeys'] = []
   const placeholderIssues: ValidationReport['placeholderIssues'] = []
   const sourceDiagnostics = dataset.sourceDiagnostics ?? []
+  const sourceDiagnosticAnalysis = analyzeSourceDiagnostics(dataset)
+  const sourceDiagnosticIssues = sourceDiagnosticAnalysis.issues
 
   for (const [table, fields] of Object.entries(requiredKoreanFields) as Array<
     [KoreanFieldTable, readonly string[]]
@@ -385,6 +520,12 @@ export function validateReferenceData(
     addBrokenReference(brokenReferences, 'evolutions', key, 'forms', row.fromFormId, formIds)
     addBrokenReference(brokenReferences, 'evolutions', key, 'forms', row.toFormId, formIds)
   })
+  for (const issue of collectEvolutionFormIntegrityIssues(
+    dataset,
+    sourceDiagnosticAnalysis.trustedMissingTargetKeys,
+  )) {
+    brokenReferences.push({ table: 'evolutions', key: issue.key, target: issue.target })
+  }
   dataset.formAbilities.forEach((row, index) => {
     const key = `${row.formId}:${row.abilityId}:${index}`
     addBrokenReference(brokenReferences, 'formAbilities', key, 'forms', row.formId, formIds)
@@ -459,7 +600,8 @@ export function validateReferenceData(
       manifestIssues.length === 0 &&
       battleDataIssues.length === 0 &&
       duplicateKeys.length === 0 &&
-      placeholderIssues.length === 0,
+      placeholderIssues.length === 0 &&
+      sourceDiagnosticIssues.length === 0,
     version: dataset.version,
     rowCounts,
     missingKoreanFields,
@@ -470,6 +612,7 @@ export function validateReferenceData(
     duplicateKeys,
     placeholderIssues,
     sourceDiagnostics,
+    sourceDiagnosticIssues,
     sourceCommits: dataset.sourceCommits,
     sha256: dataset.sha256,
   }

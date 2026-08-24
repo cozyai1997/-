@@ -797,6 +797,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     await page.getByRole('button', { name: '정정 저장' }).click()
     await expect(page).toHaveURL(/\/my-pokemon$/)
     await expect(page.getByText(`도감번호 #${formatDex(targetNationalDexNumber)}`)).toBeVisible()
+    await expectNoInternalIdentifiers(page)
 
     const owned = await admin
       .from('owned_pokemon')

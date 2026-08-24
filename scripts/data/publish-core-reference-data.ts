@@ -2,7 +2,11 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import type { ReferenceDataset } from '../../src/features/localization/reference-data-validation'
+import {
+  analyzeSourceDiagnostics,
+  collectEvolutionFormIntegrityIssues,
+  type ReferenceDataset,
+} from '../../src/features/localization/reference-data-validation'
 
 const hangulPattern = /[ㄱ-ㅎㅏ-ㅣ가-힣]/u
 
@@ -104,9 +108,21 @@ export function prepareCoreReferenceData(dataset: ReferenceDataset) {
 export function analyzeEvolutionPublication(dataset: ReferenceDataset) {
   const speciesIds = new Set(dataset.species.map((row) => row.id))
   const formIds = new Set(dataset.forms.map((row) => row.id))
-  const missingTargetDiagnostics = (dataset.sourceDiagnostics ?? [])
-    .filter((diagnostic) => diagnostic.code === 'missing-evolution-target-form')
-  const missingTargetKeys = new Set(missingTargetDiagnostics.map((diagnostic) => diagnostic.key))
+  const diagnosticAnalysis = analyzeSourceDiagnostics(dataset)
+  if (diagnosticAnalysis.issues.length > 0) throw new Error(diagnosticAnalysis.issues[0])
+  const formIntegrityIssues = collectEvolutionFormIntegrityIssues(
+    dataset,
+    diagnosticAnalysis.trustedMissingTargetKeys,
+  )
+  if (formIntegrityIssues.length > 0) {
+    const issue = formIntegrityIssues[0]
+    const label = issue.target.startsWith('formSpecies:')
+      ? `toFormSpecies:${issue.target.slice('formSpecies:'.length)}`
+      : issue.target
+    throw new Error(`evolutions:${issue.key}:${label}`)
+  }
+  const missingTargetDiagnostics = diagnosticAnalysis.trustedDiagnostics
+  const missingTargetKeys = diagnosticAnalysis.trustedMissingTargetKeys
   const evolutions: Array<{
     fromFormIdentifier: string
     toFormIdentifier: string
@@ -121,6 +137,10 @@ export function analyzeEvolutionPublication(dataset: ReferenceDataset) {
     const key = row.id ?? `${row.fromSpeciesId}>${row.toSpeciesId}:${sourceIndex}`
     const fromFormIdentifier = row.fromFormId ?? `${row.fromSpeciesId}-normal`
     const toFormIdentifier = row.toFormId ?? `${row.toSpeciesId}-normal`
+    if (missingTargetKeys.has(key)) {
+      excludedMissingTargetCount += 1
+      return
+    }
     if (
       !hangulPattern.test(row.conditionKo)
       || !speciesIds.has(row.fromSpeciesId)
@@ -132,8 +152,7 @@ export function analyzeEvolutionPublication(dataset: ReferenceDataset) {
       return
     }
     if (row.fromSpeciesId === row.toSpeciesId && !row.toFormId) {
-      if (missingTargetKeys.has(key)) excludedMissingTargetCount += 1
-      else excludedPureSameSpeciesCount += 1
+      excludedPureSameSpeciesCount += 1
       return
     }
     if (!formIds.has(toFormIdentifier)) {
@@ -147,6 +166,12 @@ export function analyzeEvolutionPublication(dataset: ReferenceDataset) {
       sortOrder: sourceIndex,
     })
   })
+
+  const accountedCount = evolutions.length + excludedPureSameSpeciesCount
+    + excludedMissingTargetCount + excludedInvalidCount
+  if (accountedCount !== dataset.evolutions.length) {
+    throw new Error(`evolutions:accounting:actual=${accountedCount}:source=${dataset.evolutions.length}`)
+  }
 
   return {
     sourceCount: dataset.evolutions.length,

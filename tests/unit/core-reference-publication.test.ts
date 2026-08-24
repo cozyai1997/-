@@ -69,6 +69,7 @@ const dataset: ReferenceDataset = {
     id: 'eevee>vaporeon:0',
     fromSpeciesId: 'eevee',
     toSpeciesId: 'eevee',
+    toFormId: 'eevee-gmax',
     conditionKo: '물의돌 사용',
   }],
   formAbilities: [],
@@ -107,12 +108,11 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
     )
     candidate.forms.push(
       { ...candidate.forms[0], id: 'gengar-normal', speciesId: 'gengar', nameKo: '기본 모습' },
-      { ...candidate.forms[0], id: 'gengar-mega', speciesId: 'gengar', nameKo: '메가팬텀', isBattleOnly: true },
+      { ...candidate.forms[0], id: 'gengar-mega', speciesId: 'gengar', baseFormId: 'gengar-normal', nameKo: '메가팬텀', isBattleOnly: true },
       { ...candidate.forms[0], id: 'milotic-normal', speciesId: 'milotic', nameKo: '기본 모습' },
     )
     candidate.evolutions = [
       { id: 'gengar>megagengar:71', fromSpeciesId: 'gengar', toSpeciesId: 'gengar', toFormId: 'gengar-mega', conditionKo: '키스톤 사용' },
-      { id: 'eevee>eevee:72', fromSpeciesId: 'eevee', toSpeciesId: 'eevee', conditionKo: '특수 조건' },
       { id: 'milotic>megamilotic:233', fromSpeciesId: 'milotic', toSpeciesId: 'milotic', conditionKo: '키스톤 사용' },
     ]
     const withDiagnostics = Object.assign(candidate, {
@@ -128,9 +128,9 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
     const prepared = prepareCoreReferenceData(withDiagnostics)
 
     expect(analysis).toMatchObject({
-      sourceCount: 3,
+      sourceCount: 2,
       publishableCount: 1,
-      excludedPureSameSpeciesCount: 1,
+      excludedPureSameSpeciesCount: 0,
       excludedMissingTargetCount: 1,
       excludedInvalidCount: 0,
     })
@@ -141,6 +141,82 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
       conditionKo: '키스톤 사용',
       sortOrder: 0,
     }])
+  })
+
+  it.each([
+    ['implicit', undefined],
+    ['explicit default', 'eevee-normal'],
+  ] as const)('같은 종의 %s base/self 폼 전이는 게시 경계에서 거부한다', (_label, toFormId) => {
+    const candidate = structuredClone(dataset)
+    candidate.evolutions = [{
+      id: 'eevee>eevee:72', fromSpeciesId: 'eevee', toSpeciesId: 'eevee',
+      toFormId, conditionKo: '특수 조건',
+    }]
+
+    expect(() => analyzeEvolutionPublication(candidate))
+      .toThrow('evolutions:eevee>eevee:72:sameSpeciesDefaultForm:eevee-normal')
+  })
+
+  it('다른 종 소유 폼을 진화 대상으로 지정하면 게시 경계에서 거부한다', () => {
+    const candidate = structuredClone(dataset)
+    candidate.species.push({
+      id: 'vaporeon', nationalDexNumber: 134, nameKo: '샤미드', descriptionKo: '물 포켓몬이다.',
+    })
+    candidate.evolutions = [{
+      id: 'eevee>vaporeon:73', fromSpeciesId: 'eevee', toSpeciesId: 'vaporeon',
+      toFormId: 'eevee-gmax', conditionKo: '물의돌 사용',
+    }]
+
+    expect(() => analyzeEvolutionPublication(candidate))
+      .toThrow('evolutions:eevee>vaporeon:73:toFormSpecies:eevee')
+  })
+
+  it('암시적 대상 기본 폼이 없으면 게시 경계에서 거부한다', () => {
+    const candidate = structuredClone(dataset)
+    candidate.species.push({
+      id: 'vaporeon', nationalDexNumber: 134, nameKo: '샤미드', descriptionKo: '물 포켓몬이다.',
+    })
+    candidate.evolutions = [{
+      id: 'eevee>vaporeon:74', fromSpeciesId: 'eevee', toSpeciesId: 'vaporeon', conditionKo: '물의돌 사용',
+    }]
+
+    expect(() => analyzeEvolutionPublication(candidate))
+      .toThrow('evolutions:eevee>vaporeon:74:forms:vaporeon-normal')
+  })
+
+  it('중복·orphan source diagnostic으로 게시 제외 수량을 조작할 수 없다', () => {
+    const candidate = structuredClone(dataset)
+    candidate.evolutions = [{
+      id: 'eevee>megaeevee:74', fromSpeciesId: 'eevee', toSpeciesId: 'eevee', conditionKo: '키스톤 사용',
+    }]
+    candidate.sourceDiagnostics = [
+      { code: 'missing-evolution-target-form', table: 'evolutions', key: 'eevee>megaeevee:74', target: 'forms:eevee-mega' },
+      { code: 'missing-evolution-target-form', table: 'evolutions', key: 'eevee>megaeevee:74', target: 'forms:eevee-mega' },
+      { code: 'missing-evolution-target-form', table: 'evolutions', key: 'eevee>megaeevee:999', target: 'forms:eevee-mega' },
+    ]
+    candidate.reportedCounts.evolutions = 999
+
+    expect(() => analyzeEvolutionPublication(candidate)).toThrow('sourceDiagnostics:')
+  })
+
+  it('게시 회계는 candidate 보고 수가 아니라 실제 진화 행과 신뢰된 진단으로 계산한다', () => {
+    const candidate = structuredClone(dataset)
+    candidate.evolutions = [{
+      id: 'eevee>megaeevee:74', fromSpeciesId: 'eevee', toSpeciesId: 'eevee', conditionKo: '키스톤 사용',
+    }]
+    candidate.sourceDiagnostics = [{
+      code: 'missing-evolution-target-form', table: 'evolutions',
+      key: 'eevee>megaeevee:74', target: 'forms:eevee-mega',
+    }]
+    candidate.reportedCounts.evolutions = 999
+
+    expect(analyzeEvolutionPublication(candidate)).toMatchObject({
+      sourceCount: 1,
+      publishableCount: 0,
+      excludedPureSameSpeciesCount: 0,
+      excludedMissingTargetCount: 1,
+      excludedInvalidCount: 0,
+    })
   })
 
   it('실패 시 일부 행이 노출되지 않도록 하나의 트랜잭션 SQL을 만든다', () => {

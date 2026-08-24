@@ -10,6 +10,22 @@ import {
 import type { ReferenceDataset } from '@/features/localization/reference-data-validation'
 
 function countCorrectCandidate(): ReferenceDataset {
+  const types = [
+    { id: 'normal', nameKo: '노말' },
+    ...Array.from({ length: 17 }, (_, index) => ({ id: `type-${index}`, nameKo: `타입가-${index}` })),
+  ]
+  const species = [
+    {
+      id: 'species-a', nationalDexNumber: 1, nameKo: '이상해씨',
+      descriptionKo: '검증용 포켓몬이다.',
+    },
+    ...Array.from({ length: 1_024 }, (_, index) => ({
+      id: `species-${index + 1}`,
+      nationalDexNumber: index + 2,
+      nameKo: `포켓몬가-${index + 1}`,
+      descriptionKo: `검증용 포켓몬 설명 ${index + 1}`,
+    })),
+  ]
   const forms = Array.from({ length: 1_498 }, (_, index) => ({
     id: `form-${index}`,
     speciesId: 'species-a',
@@ -34,38 +50,36 @@ function countCorrectCandidate(): ReferenceDataset {
 
   return {
     version: 'candidate-v1',
-    sourceCommits: {},
-    sha256: {},
+    sourceCommits: { source: 'a'.repeat(40) },
+    sha256: { source: 'b'.repeat(64) },
     battleOnlyDiagnostics: Array.from({ length: 9 }, (_, index) => `diagnostic-${index}`),
     reportedCounts: {
-      types: 1,
-      species: 1,
+      types: 18,
+      species: 1_025,
       forms: 1_498,
-      abilities: 1,
+      abilities: 310,
       moves: 826,
       learnsets: 116_519,
-      items: 0,
-      evolutions: 0,
+      items: 615,
+      evolutions: 602,
       formAbilities: 3_055,
       natures: 25,
-      typeMatchups: 0,
+      typeMatchups: 324,
       teraTypes: 19,
       formTeraOptions: 25_184,
       formGigantamaxOptions: 42,
     },
-    types: [{ id: 'normal', nameKo: '노말' }],
-    species: [{
-      id: 'species-a',
-      nationalDexNumber: 1,
-      nameKo: '이상해씨',
-      descriptionKo: '검증용 포켓몬이다.',
-    }],
+    types,
+    species,
     forms,
-    abilities: [{
-      id: 'ability-a',
-      nameKo: '심록',
-      descriptionKo: '위기일 때 풀 타입 기술이 강해진다.',
-    }],
+    abilities: [
+      { id: 'ability-a', nameKo: '심록', descriptionKo: '위기일 때 풀 타입 기술이 강해진다.' },
+      ...Array.from({ length: 309 }, (_, index) => ({
+        id: `ability-${index + 1}`,
+        nameKo: `특성가-${index + 1}`,
+        descriptionKo: `검증용 특성 설명 ${index + 1}`,
+      })),
+    ],
     moves,
     learnsets: Array.from({ length: 116_519 }, (_, index) => ({
       speciesId: 'species-a',
@@ -73,15 +87,25 @@ function countCorrectCandidate(): ReferenceDataset {
       moveId: `move-${index % 826}`,
       learnMethod: 'level' as const,
       learnLevel: 1,
-      conditionKo: '레벨 1에 습득',
+      conditionKo: `레벨 1에 습득 ${index}`,
     })),
-    items: [],
-    evolutions: [],
+    items: Array.from({ length: 615 }, (_, index) => ({
+      id: `item-${index}`,
+      nameKo: `도구가-${index}`,
+      descriptionKo: `검증용 도구 설명 ${index}`,
+    })),
+    evolutions: Array.from({ length: 602 }, (_, index) => ({
+      id: `species-a>species-a:${index}`,
+      fromSpeciesId: 'species-a',
+      toSpeciesId: 'species-a',
+      toFormId: `form-${index + 1}`,
+      conditionKo: `레벨 ${index + 1}에 진화`,
+    })),
     formAbilities: Array.from({ length: 3_055 }, (_, index) => ({
       formId: `form-${index % 1_498}`,
       speciesId: 'species-a',
       abilityId: 'ability-a',
-      slot: 'first',
+      slot: `slot-${Math.floor(index / 1_498)}`,
       isHidden: false,
     })),
     natures: Array.from({ length: 25 }, (_, index) => ({
@@ -101,7 +125,11 @@ function countCorrectCandidate(): ReferenceDataset {
     formGigantamaxOptions: Array.from({ length: 42 }, (_, index) => ({
       sourceFormId: `form-${index}`, gigantamaxFormId: `form-${1_334 + index}`,
     })),
-    typeMatchups: [],
+    typeMatchups: types.flatMap((attackingType) => types.map((defendingType) => ({
+      attackingTypeId: attackingType.id,
+      defendingTypeId: defendingType.id,
+      multiplier: 1,
+    }))),
   }
 }
 
@@ -210,6 +238,33 @@ describe('포켓몬 선택 필터 게시', () => {
 
     await expect(publishPokemonOptionFilterReferenceData(candidate, client as never))
       .rejects.toThrow('forms:form-0:baseStats')
+    expect(client.from).not.toHaveBeenCalled()
+  })
+
+  it('중복 관계가 있으면 전체 validator가 첫 DB 호출 전에 거부한다', async () => {
+    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
+    const candidate = structuredClone(validCandidate)
+    candidate.learnsets[1] = { ...candidate.learnsets[0] }
+
+    await expect(publishPokemonOptionFilterReferenceData(candidate, client as never))
+      .rejects.toThrow('learnsets:species-a::move-0:level:1:레벨 1에 습득 0:duplicate')
+    expect(client.from).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['printf', (candidate: ReferenceDataset) => { candidate.items[0].nameKo = '%s포플레' }, '%s'],
+    ['brace', (candidate: ReferenceDataset) => { candidate.items[0].descriptionKo = '{count}개 사용' }, '{count}'],
+  ] as const)('%s 표시 토큰이 있으면 전체 validator가 첫 DB 호출 전에 거부한다', async (
+    _label,
+    tamper,
+    token,
+  ) => {
+    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
+    const candidate = structuredClone(validCandidate)
+    tamper(candidate)
+
+    await expect(publishPokemonOptionFilterReferenceData(candidate, client as never))
+      .rejects.toThrow(token)
     expect(client.from).not.toHaveBeenCalled()
   })
 

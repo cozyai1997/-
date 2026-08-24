@@ -39,6 +39,35 @@ const fixtureBattleProfile: BattleDatasetProfile = {
   battleOnlyDiagnostics: 0,
 }
 
+function missingMegaFixture(): ReferenceDataset {
+  const dataset = structuredClone(completeFixture) as ReferenceDataset
+  dataset.evolutions = [{
+    id: 'eevee>megaeevee:0',
+    fromSpeciesId: 'eevee',
+    toSpeciesId: 'eevee',
+    conditionKo: '키스톤 사용',
+  }]
+  dataset.sourceDiagnostics = [{
+    code: 'missing-evolution-target-form',
+    table: 'evolutions',
+    key: 'eevee>megaeevee:0',
+    target: 'forms:eevee-mega',
+  }]
+  dataset.reportedCounts.evolutions = 1
+  return dataset
+}
+
+function validateMissingMegaFixture(dataset: ReferenceDataset) {
+  return validateReferenceData(dataset, {
+    expectedRowCounts: { ...fixtureCounts, evolutions: 1, forms: dataset.forms.length },
+    expectedBattleRowCounts: fixtureBattleCounts,
+    expectedBattleDatasetProfile: {
+      ...fixtureBattleProfile,
+      battleOnlyForms: dataset.forms.filter((form) => form.isBattleOnly).length,
+    },
+  })
+}
+
 describe('한국어 기준 데이터 공개 검증', () => {
   it('필수 한국어 필드가 완성된 데이터만 승인한다', () => {
     const report = validateReferenceData(completeFixture as ReferenceDataset, {
@@ -137,6 +166,152 @@ describe('한국어 기준 데이터 공개 검증', () => {
     expect(report.duplicateKeys).toContainEqual({
       table: 'evolutions',
       key: 'eevee::eevee::특수 조건',
+    })
+  })
+
+  it('원본에 실제 mega 대상 폼이 없는 행과 정확히 대응하는 진단만 승인한다', () => {
+    const report = validateMissingMegaFixture(missingMegaFixture())
+
+    expect(report.valid).toBe(true)
+    expect(report.sourceDiagnosticIssues).toEqual([])
+  })
+
+  it.each([
+    [
+      'orphan',
+      (dataset: ReferenceDataset) => { dataset.sourceDiagnostics![0].key = 'eevee>megaeevee:999' },
+      'sourceDiagnostics:eevee>megaeevee:999:evolution-row-count=0',
+    ],
+    [
+      'fabricated target',
+      (dataset: ReferenceDataset) => { dataset.sourceDiagnostics![0].target = 'forms:eevee-gmax' },
+      'sourceDiagnostics:eevee>megaeevee:0:target=forms:eevee-gmax:expected=forms:eevee-mega',
+    ],
+    [
+      'duplicate',
+      (dataset: ReferenceDataset) => { dataset.sourceDiagnostics!.push({ ...dataset.sourceDiagnostics![0] }) },
+      'sourceDiagnostics:eevee>megaeevee:0:duplicate',
+    ],
+    [
+      'source mismatch',
+      (dataset: ReferenceDataset) => {
+        dataset.evolutions[0].id = 'pikachu>megapikachu:0'
+        dataset.sourceDiagnostics![0] = {
+          ...dataset.sourceDiagnostics![0],
+          key: 'pikachu>megapikachu:0',
+          target: 'forms:pikachu-mega',
+        }
+      },
+      'sourceDiagnostics:pikachu>megapikachu:0:source-species=eevee:raw=pikachu',
+    ],
+    [
+      'metadata',
+      (dataset: ReferenceDataset) => {
+        const diagnostic = dataset.sourceDiagnostics![0] as unknown as { code: string; table: string }
+        diagnostic.code = 'fabricated-code'
+        diagnostic.table = 'forms'
+      },
+      'sourceDiagnostics:eevee>megaeevee:0:metadata',
+    ],
+  ] as const)('%s source diagnostic 변조를 거부한다', (_label, tamper, issue) => {
+    const dataset = missingMegaFixture()
+    tamper(dataset)
+
+    const report = validateMissingMegaFixture(dataset)
+
+    expect(report.valid).toBe(false)
+    expect(report.sourceDiagnosticIssues).toContain(issue)
+  })
+
+  it('진단이 가리키는 대상 폼이 실제로 있으면 source gap으로 인정하지 않는다', () => {
+    const dataset = missingMegaFixture()
+    dataset.forms.push({
+      ...dataset.forms[0],
+      id: 'eevee-mega',
+      baseFormId: 'eevee-normal',
+      nameKo: '메가이브이',
+      isBattleOnly: true,
+    })
+    dataset.reportedCounts.forms = 2
+
+    const report = validateMissingMegaFixture(dataset)
+
+    expect(report.valid).toBe(false)
+    expect(report.sourceDiagnosticIssues).toContain(
+      'sourceDiagnostics:eevee>megaeevee:0:target-present=forms:eevee-mega',
+    )
+  })
+
+  it('진화 대상 폼이 대상 종에 속하지 않으면 거부한다', () => {
+    const dataset = structuredClone(completeFixture) as ReferenceDataset
+    dataset.species.push({
+      id: 'vaporeon', nationalDexNumber: 134, nameKo: '샤미드', descriptionKo: '물 포켓몬이다.',
+    })
+    dataset.forms.push({
+      ...dataset.forms[0], id: 'vaporeon-normal', speciesId: 'vaporeon',
+      baseFormId: null, nameKo: '기본 모습', isBattleOnly: true,
+    })
+    dataset.evolutions = [{
+      id: 'eevee>vaporeon:0', fromSpeciesId: 'eevee', toSpeciesId: 'vaporeon',
+      toFormId: 'eevee-normal', conditionKo: '물의돌 사용',
+    }]
+    Object.assign(dataset.reportedCounts, { species: 2, forms: 2, evolutions: 1 })
+
+    const report = validateReferenceData(dataset, {
+      expectedRowCounts: { ...fixtureCounts, species: 2, forms: 2, evolutions: 1 },
+      expectedBattleRowCounts: fixtureBattleCounts,
+      expectedBattleDatasetProfile: { ...fixtureBattleProfile, battleOnlyForms: 1 },
+    })
+
+    expect(report.valid).toBe(false)
+    expect(report.brokenReferences).toContainEqual({
+      table: 'evolutions', key: 'eevee>vaporeon:0', target: 'formSpecies:eevee',
+    })
+  })
+
+  it('암시적 대상 기본 폼이 실제로 없으면 거부한다', () => {
+    const dataset = structuredClone(completeFixture) as ReferenceDataset
+    dataset.species.push({
+      id: 'vaporeon', nationalDexNumber: 134, nameKo: '샤미드', descriptionKo: '물 포켓몬이다.',
+    })
+    dataset.evolutions = [{
+      id: 'eevee>vaporeon:1', fromSpeciesId: 'eevee', toSpeciesId: 'vaporeon',
+      conditionKo: '물의돌 사용',
+    }]
+    Object.assign(dataset.reportedCounts, { species: 2, evolutions: 1 })
+
+    const report = validateReferenceData(dataset, {
+      expectedRowCounts: { ...fixtureCounts, species: 2, evolutions: 1 },
+      expectedBattleRowCounts: fixtureBattleCounts,
+      expectedBattleDatasetProfile: fixtureBattleProfile,
+    })
+
+    expect(report.valid).toBe(false)
+    expect(report.brokenReferences).toContainEqual({
+      table: 'evolutions', key: 'eevee>vaporeon:1', target: 'forms:vaporeon-normal',
+    })
+  })
+
+  it.each([
+    ['implicit', undefined],
+    ['explicit', 'eevee-normal'],
+  ] as const)('같은 종 진화가 %s 기본/self 폼을 대상으로 하면 거부한다', (_label, toFormId) => {
+    const dataset = structuredClone(completeFixture) as ReferenceDataset
+    dataset.evolutions = [{
+      id: 'eevee>eevee:0', fromSpeciesId: 'eevee', toSpeciesId: 'eevee',
+      toFormId, conditionKo: '특수 조건',
+    }]
+    dataset.reportedCounts.evolutions = 1
+
+    const report = validateReferenceData(dataset, {
+      expectedRowCounts: { ...fixtureCounts, evolutions: 1 },
+      expectedBattleRowCounts: fixtureBattleCounts,
+      expectedBattleDatasetProfile: fixtureBattleProfile,
+    })
+
+    expect(report.valid).toBe(false)
+    expect(report.brokenReferences).toContainEqual({
+      table: 'evolutions', key: 'eevee>eevee:0', target: 'sameSpeciesDefaultForm:eevee-normal',
     })
   })
 

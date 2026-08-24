@@ -15,9 +15,9 @@
 - 기준 프로필은 Cobbleverse 1.7.42 / Cobblemon 1.7.3이다.
 - 화면에는 영어 식별자·내부 UUID를 표시하지 않고 한국어 이름과 공식 도감번호만 표시한다.
 - 기존 18개 타입과 324개 상성 관계는 그대로 두며 스텔라는 별도 테라타입 테이블에 저장한다.
-- 플레이 가능 폼은 1,339개, battle-only 폼은 159개이며 기존 battle-only 보유 행을 삭제하지 않는다.
+- 플레이 가능 폼은 1,334개, battle-only 폼은 164개이며 기존 battle-only 보유 행을 삭제하지 않는다. Cobblemon raw JSON의 `battleOnly`가 권위 원본이며 CSV와의 예상 불일치 9개는 진단으로 보존한다.
 - 일반 플레이 가능 폼은 19개 테라타입을 허용하고, 오거폰 8개 폼과 테라파고스 일반폼은 각각 고정 테라타입 하나만 허용한다.
-- 운영 후보 데이터의 테라 관계는 25,279행, 거다이맥스 관계는 42행이어야 한다.
+- 운영 후보 데이터의 테라 관계는 25,184행, 거다이맥스 관계는 42행이어야 한다.
 - 거다이맥스 가능 여부는 종이 아니라 폼 관계로 판정하며, 실제 인자 보유 여부는 사용자 입력으로 저장한다.
 - 기술 PP는 남은 PP가 아닌 기본 최대 PP이며 `기본 PP: 15` 또는 `기본 PP: 확인 불가`로 표시한다.
 - 네 능력치 용어와 설명은 승인 설계 문구를 그대로 사용한다.
@@ -105,8 +105,10 @@
   Add literal fixtures proving all-six-zero inheritance, two-level inheritance, missing parent, cycle, partial-zero rejection, CSV/raw `BattleOnly` disagreement rejection, `defence`/`special_defence` conversion, 25 nature mappings, 19 Tera types, Ogerpon masks, Terapagos Stellar-only, and the 42 Gmax relationships. The production-sized assertion must be:
 
   ```ts
-  expect(result.forms.filter((form) => !form.isBattleOnly)).toHaveLength(1_339)
-  expect(result.formTeraOptions).toHaveLength(25_279)
+  expect(result.forms.filter((form) => !form.isBattleOnly)).toHaveLength(1_334)
+  expect(result.forms.filter((form) => form.isBattleOnly)).toHaveLength(164)
+  expect(result.battleOnlyDiagnostics).toHaveLength(9)
+  expect(result.formTeraOptions).toHaveLength(25_184)
   expect(result.formGigantamaxOptions).toHaveLength(42)
   ```
 
@@ -162,7 +164,7 @@
 
   Run: `pnpm test -- tests/unit/pokemon-battle-data-normalization.test.ts tests/unit/source-normalization.test.ts`
 
-  Expected: PASS with 1,498 complete forms, 1,339 playable forms, 25,279 Tera links, and 42 Gmax links.
+  Expected: PASS with 1,498 complete forms, 1,334 playable forms, 164 battle-only forms, 9 expected raw-vs-CSV diagnostics, 25,184 Tera links, and 42 Gmax links.
 
 - [ ] **Step 6: Commit**
 
@@ -188,7 +190,7 @@
 
 - [ ] **Step 1: Write failing validation and staging tests**
 
-  Assert exact production counts `19`, `25_279`, `42`; all six stats complete; every playable form has at least one Tera option; battle-only forms have none; Ogerpon/Terapagos have exactly one; Gmax source/target share species and target is battle-only; nature keys are valid non-HP keys. Assert that staged payloads use UUIDs internally but retain only Korean display names for UI-facing rows.
+  Assert exact production counts `19`, `25_184`, `42`; raw-authoritative playable/battle-only counts `1_334` / `164` and 9 expected CSV mismatch diagnostics; all six stats complete; every playable form has at least one Tera option; battle-only forms have none; Ogerpon/Terapagos have exactly one; Gmax source/target share species and target is battle-only; nature keys are valid non-HP keys. Assert that staged payloads use UUIDs internally but retain only Korean display names for UI-facing rows.
 
 - [ ] **Step 2: Run the tests and verify RED**
 
@@ -213,7 +215,7 @@
     | 'form_gigantamax_option'
   ```
 
-  Include `base_form_id`, six stat columns, and `is_battle_only` in `form_battle_profile`. Include 25 nature adjustments, 19 Tera types, 25,279 Tera links, and 42 Gmax links in the same `stageThenReplacePublicationRows()` call as moves, abilities, and learnsets.
+  Include `base_form_id`, six stat columns, and `is_battle_only` in `form_battle_profile`. Include 25 nature adjustments, 19 Tera types, 25,184 Tera links, and 42 Gmax links in the same `stageThenReplacePublicationRows()` call as moves, abilities, and learnsets.
 
 - [ ] **Step 5: Run the tests and verify GREEN**
 
@@ -664,7 +666,7 @@
   pnpm data:validate -- --input .reference-data/candidate.json --report .reference-data/validation-report.json
   ```
 
-  Inspect the report and assert: valid, forms 1,498, playable forms 1,339, Tera types 19, Tera links 25,279, Gmax links 42, natures 25, moves 826, learnsets 116,519, and type matchups 324.
+  Inspect the report and assert: valid, forms 1,498, playable forms 1,334, battle-only forms 164, expected raw battleOnly diagnostics 9, Tera types 19, Tera links 25,184, Gmax links 42, natures 25, moves 826, learnsets 116,519, and type matchups 324.
 
 - [ ] **Step 5: Run the complete local quality gate**
 

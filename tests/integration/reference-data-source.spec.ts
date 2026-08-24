@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { importReferenceData } from '../../scripts/data/import-reference-data'
 import { analyzeEvolutionPublication } from '../../scripts/data/publish-core-reference-data'
+import { validateReferenceData } from '../../src/features/localization/reference-data-validation'
 
 type CsvRow = Record<string, string>
 
@@ -68,6 +69,31 @@ describe.runIf(enabled)('실제 기준데이터 원본 독립 완전성', () => 
       expect(candidate[table], `${table} candidate 행`).toHaveLength(rows.length)
     }
 
+    const candidateRelationContracts = [
+      ['learnsets', candidate.learnsets, (row: typeof candidate.learnsets[number]) => [
+        row.speciesId, row.formId ?? '', row.moveId, row.learnMethod, row.learnLevel ?? '', row.conditionKo,
+      ]],
+      ['evolutions', candidate.evolutions, (row: typeof candidate.evolutions[number]) => [
+        row.fromSpeciesId, row.fromFormId ?? '', row.toSpeciesId, row.toFormId ?? '', row.conditionKo,
+      ]],
+      ['formAbilities', candidate.formAbilities, (row: typeof candidate.formAbilities[number]) => [
+        row.formId, row.speciesId, row.abilityId, row.slot, row.isHidden,
+      ]],
+      ['typeMatchups', candidate.typeMatchups, (row: typeof candidate.typeMatchups[number]) => [
+        row.attackingTypeId, row.defendingTypeId,
+      ]],
+      ['formTeraOptions', candidate.formTeraOptions, (row: typeof candidate.formTeraOptions[number]) => [
+        row.formId, row.teraTypeId,
+      ]],
+      ['formGigantamaxOptions', candidate.formGigantamaxOptions, (row: typeof candidate.formGigantamaxOptions[number]) => [
+        row.sourceFormId, row.gigantamaxFormId,
+      ]],
+    ] as const
+    for (const [table, rows, keyFor] of candidateRelationContracts) {
+      const keys = rows.map((row) => keyFor(row as never).join('\u001f'))
+      expect(new Set(keys).size, `${table} candidate 고유 관계`).toBe(rows.length)
+    }
+
     const rawBattleOnly = sources.forms.filter((form) => {
       if (form.FormEN === 'Normal') return false
       const raw = JSON.parse(readFileSync(join(cacheRoot, `${form.SpeciesID}.json`), 'utf8')) as {
@@ -79,22 +105,35 @@ describe.runIf(enabled)('실제 기준데이터 원본 독립 완전성', () => 
     }).length
     const typeIds = new Set(sources.typeMatchups.flatMap((row) => [row.AttackType, row.DefenseType]))
     const publication = analyzeEvolutionPublication(candidate)
+    const validation = validateReferenceData(candidate)
 
     expect(typeIds.size).toBe(18)
     expect(candidate.types).toHaveLength(typeIds.size)
     expect(candidate.forms.filter((form) => form.isBattleOnly)).toHaveLength(rawBattleOnly)
     expect(candidate.battleOnlyDiagnostics).toHaveLength(9)
+    expect(validation.valid, JSON.stringify(validation)).toBe(true)
+    expect(validation.sourceDiagnosticIssues).toEqual([])
     expect(candidate.sourceDiagnostics).toEqual([
       { code: 'missing-evolution-target-form', table: 'evolutions', key: 'milotic>megamilotic:233', target: 'forms:milotic-mega' },
       { code: 'missing-evolution-target-form', table: 'evolutions', key: 'milotic>megamilotic:234', target: 'forms:milotic-mega' },
     ])
     expect(publication).toMatchObject({
       sourceCount: 602,
-      publishableCount: 573,
-      excludedPureSameSpeciesCount: 27,
+      publishableCount: 600,
+      excludedPureSameSpeciesCount: 0,
       excludedMissingTargetCount: 2,
       excludedInvalidCount: 0,
     })
+    expect(candidate.evolutions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'tornadus>tornadus:367', toFormId: 'tornadus-therian' }),
+      expect.objectContaining({ id: 'kyurem>kyurem:370', toFormId: 'kyurem-black' }),
+      expect.objectContaining({ id: 'keldeo>keldeo:372', toFormId: 'keldeo-resolute' }),
+      expect.objectContaining({ id: 'hoopa>hoopa:414', toFormId: 'hoopa-unbound' }),
+      expect.objectContaining({ id: 'silvally>silvally:448', toFormId: 'silvally-water' }),
+      expect.objectContaining({ id: 'zacian>zacian:552', toFormId: 'zacian-crowned' }),
+      expect.objectContaining({ id: 'eternatus>eternatus:554', toFormId: 'eternatus-eternamax' }),
+      expect.objectContaining({ id: 'enamorus>enamorus:559', toFormId: 'enamorus-therian' }),
+    ]))
     expect(publication.publishableCount + publication.excludedPureSameSpeciesCount
       + publication.excludedMissingTargetCount + publication.excludedInvalidCount)
       .toBe(sources.evolutions.length)
