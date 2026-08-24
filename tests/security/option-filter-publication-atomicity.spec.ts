@@ -16,7 +16,6 @@ const ids = {
   failedBatch: randomUUID(),
   firstSuccessfulBatch: randomUUID(),
   secondSuccessfulBatch: randomUUID(),
-  rotationBatch: randomUUID(),
   rotationSpecies: randomUUID(),
   rotationForm: randomUUID(),
   type: randomUUID(),
@@ -412,14 +411,6 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
     expect(form.data).toEqual({ base_form_id: null })
     expect(abilities.data).toEqual([{ ability_id: ids.ability }])
     expect(learnsets.data).toEqual([{ move_id: ids.move, learn_level: 0 }])
-    runLocalSql(`update public.reference_option_filter_publication_staging
-      set payload = jsonb_set(payload, '{identifier}', '"count-correct-but-invalid"')
-      where batch_id = '${ids.failedBatch}' and row_kind = 'tera_type' and source_order = 0;`)
-    const canonicalSet = await admin.rpc('replace_pokemon_option_filter_reference_data', {
-      p_publication_id: ids.publication,
-      p_batch_id: ids.failedBatch,
-    })
-    expect(canonicalSet.error?.message).toContain('canonical 19')
     const cleanup = await admin
       .from('reference_option_filter_publication_staging')
       .delete()
@@ -427,9 +418,20 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
     expect(cleanup.error).toBeNull()
   }, 60_000)
 
-  it('같은 active publication을 두 번 완전히 교체하고 아홉 종류 staging을 모두 지운다', async () => {
-    for (const batchId of [ids.firstSuccessfulBatch, ids.secondSuccessfulBatch]) {
+  it('active publication을 완전히 교체하고 아홉 종류 staging을 모두 지운다', async () => {
+    for (const batchId of [ids.firstSuccessfulBatch]) {
       runLocalSql(stagedRowsSql(batchId, false))
+      runLocalSql(`update public.reference_option_filter_publication_staging
+        set payload = jsonb_set(payload, '{identifier}', '"count-correct-but-invalid"')
+        where batch_id = '${batchId}' and row_kind = 'tera_type' and source_order = 0;`)
+      const canonicalSet = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+        p_publication_id: ids.publication,
+        p_batch_id: batchId,
+      })
+      expect(canonicalSet.error?.message).toContain('canonical 19')
+      runLocalSql(`update public.reference_option_filter_publication_staging
+        set payload = jsonb_set(payload, '{identifier}', '"normal"')
+        where batch_id = '${batchId}' and row_kind = 'tera_type' and source_order = 0;`)
       const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
         p_publication_id: ids.publication,
         p_batch_id: batchId,
@@ -518,10 +520,10 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
       tera_type_id: normal.data!.id,
     })).error).toBeNull()
 
-    runLocalSql(stagedRowsSql(ids.rotationBatch, false))
+    runLocalSql(stagedRowsSql(ids.secondSuccessfulBatch, false))
     const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
       p_publication_id: ids.publication,
-      p_batch_id: ids.rotationBatch,
+      p_batch_id: ids.secondSuccessfulBatch,
     })
     expect(replacement.error).toBeNull()
     const [rotated, ownedAfter, retiredOptions] = await Promise.all([

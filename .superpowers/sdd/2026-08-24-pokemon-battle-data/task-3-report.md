@@ -70,7 +70,7 @@ Remove-Item Env:RUN_SUPABASE_INTEGRATION
 
 ### RED
 
-- Added a count-correct but noncanonical Tera identifier to a full nine-kind staged batch. The replacement RPC rejected it with `staged tera types must use the canonical 19 identifiers`.
+- Mutated one Tera identifier in an already complete staged batch to a count-correct substitution. The replacement RPC rejected it with `staged tera types must use the canonical 19 identifiers`; the test restored `normal` in the same batch before executing its GREEN replacement.
 - Added a duplicate final `form_tera_option` after all mutable replacement branches. The RPC reached the late option insert, returned PostgreSQL `23505`, and the test confirmed the prior move, base-form link, ability, and learnset rows were unchanged.
 - The first run of the new field-by-field owned-Pokemon regression failed only on the fixture nickname CHECK constraint (`23514`); shortening the fixture name restored the intended battle-option case.
 
@@ -90,7 +90,7 @@ pnpm typecheck
 ```
 
 - Reset applied the battle-data migration; `db lint --local` reported `No schema errors found`.
-- The atomic suite verifies the true late `23505` rollback, canonical 19-ID rejection, same-publication replacement, and cross-publication rotation. It removes the retired relation before moving the global `normal` Tera UUID, then proves an `owned_pokemon.tera_type_id` still points to that same UUID.
+- Atomic publication replacement: 4/4 passed in 48.64s on a clean local reset (late rollback 10.974s, canonical rejection plus full nine-kind replacement 17.982s, cross-publication stable-UUID rotation 14.219s). It uses an executable count-correct canonical-ID rejection before its full same-publication replacement, and verifies the true late `23505` rollback and cross-publication rotation. The rotation removes the retired relation before moving the global `normal` Tera UUID, then proves an `owned_pokemon.tera_type_id` still points to that same UUID.
 - Owned-Pokemon transaction/security: 16/16 passed in 3.15s after the RED fixture correction. Coverage includes independent Tera/Gigantamax explicit-change behavior, correction preservation of a still-valid Tera choice, and audit JSON battle fields.
 - RLS: 6/6 passed in 5.36s. It now covers both option tables, anon denial, normal-user write denial, RPC EXECUTE revocation, ordered cleanup, active-publication restoration, and no fixture residue.
 - Generated types and `pnpm typecheck` passed.
