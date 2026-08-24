@@ -31,7 +31,7 @@ export function PokemonStatTable({
     <div
       className="pokemon-stat-table"
       role="region"
-      aria-label={caption}
+      aria-label={`${caption} 가로 스크롤 영역`}
       tabIndex={0}
     >
       <table>
