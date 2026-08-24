@@ -31,7 +31,10 @@ export function PrivatePokemonImage({
       cache: 'no-store',
       signal: controller.signal,
     })
-      .then(async (response) => response.ok ? response.json() as Promise<{ url: string }> : null)
+      .then(async (response) => {
+        if (response.status === 204 || !response.ok) return null
+        return response.json() as Promise<{ url: string }>
+      })
       .then((result) => setSource(result?.url ?? fallback))
       .catch(() => {
         if (!controller.signal.aborted) setSource(fallback)

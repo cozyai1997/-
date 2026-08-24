@@ -48,4 +48,57 @@ describe('private image locator authorization', () => {
     expect(response.status).toBe(200)
     expect(mocks.getOwnedPokemonDetail).toHaveBeenCalledWith(client, 133, 1, 'verified-user')
   })
+
+  it('returns 204 without asking storage for a signed URL when the owned Pokemon has no image', async () => {
+    const imageQuery = {
+      select: () => imageQuery,
+      eq: () => imageQuery,
+      maybeSingle: () => Promise.resolve({ data: null, error: null }),
+    }
+    const createSignedUrl = vi.fn()
+    const client = {
+      auth: {
+        getUser: vi.fn(() => Promise.resolve({ data: { user: { id: 'verified-user' } }, error: null })),
+      },
+      from: vi.fn(() => imageQuery),
+      storage: { from: vi.fn(() => ({ createSignedUrl })) },
+    }
+    mocks.createClient.mockResolvedValue(client)
+    mocks.getOwnedPokemonDetail.mockResolvedValue({ id: 'owned' })
+
+    const response = await GET(new Request('http://example.test/api/private-images?dex=133&entry=1'))
+
+    expect(response.status).toBe(204)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(await response.text()).toBe('')
+    expect(createSignedUrl).not.toHaveBeenCalled()
+  })
+
+  it('keeps unauthenticated and non-owner requests distinct from normal image absence', async () => {
+    const unauthenticatedClient = {
+      auth: {
+        getUser: vi.fn(() => Promise.resolve({ data: { user: null }, error: new Error('signed out') })),
+      },
+    }
+    mocks.createClient.mockResolvedValueOnce(unauthenticatedClient)
+
+    const unauthenticated = await GET(new Request(
+      'http://example.test/api/private-images?dex=133&entry=1',
+    ))
+
+    expect(unauthenticated.status).toBe(401)
+    expect(mocks.getOwnedPokemonDetail).not.toHaveBeenCalled()
+
+    const ownerClient = {
+      auth: {
+        getUser: vi.fn(() => Promise.resolve({ data: { user: { id: 'verified-user' } }, error: null })),
+      },
+    }
+    mocks.createClient.mockResolvedValueOnce(ownerClient)
+    mocks.getOwnedPokemonDetail.mockResolvedValueOnce(null)
+
+    const notOwner = await GET(new Request('http://example.test/api/private-images?dex=133&entry=1'))
+
+    expect(notOwner.status).toBe(404)
+  })
 })

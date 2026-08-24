@@ -1280,7 +1280,7 @@
     },
     [ordered]@{
       key = 'statTermsAndValues'
-      assertion = '레벨 50·성실·개체값 IV (원본) 31·적용 IV (왕관 보정 포함) 31·노력치 EV 0에서 표의 HP/공격/방어/특수공격/특수방어/스피드가 각각 35/31/31/0/110, 55/31/31/0/75, 40/31/31/0/60, 50/31/31/0/70, 50/31/31/0/70, 90/31/31/0/110이고, glossary 네 쌍은 종족값 Base Stats: 그 포켓몬 종과 폼 자체가 가진 기본 능력치; 개체값 IV (원본): 태어날 때 정해지는 0~31 수치; 노력치 EV: 전투나 아이템으로 올리는 훈련 수치, 능력치당 최대 252; 실제 능력치 Stats: 현재 레벨에서 실제 전투에 적용되는 HP·공격·방어·특공·특방·스피드 숫자임'
+      assertion = '레벨 50·성실·개체값 IV (원본) 31·적용 IV (왕관 보정 포함) 31·노력치 EV 0에서 표의 HP/공격/방어/특공/특방/스피드가 각각 35/31/31/0/110, 55/31/31/0/75, 40/31/31/0/60, 50/31/31/0/70, 50/31/31/0/70, 90/31/31/0/110이고, glossary 네 쌍은 종족값 Base Stats: 그 포켓몬 종과 폼 자체가 가진 기본 능력치; 개체값 IV (원본): 태어날 때 정해지는 0~31 수치; 노력치 EV: 전투나 아이템으로 올리는 훈련 수치, 능력치당 최대 252; 실제 능력치 Stats: 현재 레벨에서 실제 전투에 적용되는 HP·공격·방어·특공·특방·스피드 숫자임'
     },
     [ordered]@{
       key = 'teraAndGigantamax'
@@ -1292,7 +1292,7 @@
     },
     [ordered]@{
       key = 'browserErrors'
-      assertion = 'DevTools Preserve log 기준 smoke 시작부터 종료까지 uncaught console error 0건·실패 network 0건'
+      assertion = 'DevTools Preserve log 기준 smoke 시작부터 종료까지 이미지 미등록/삭제 후 GET /api/private-images는 204 No Content이고 unexpected console error 0건·unexpected failed network 0건'
     }
   )
   $smokeEvidence = [ordered]@{}

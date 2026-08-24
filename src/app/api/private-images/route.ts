@@ -19,7 +19,12 @@ export async function GET(request: Request) {
     .eq('owned_pokemon_id', context.pokemon.id)
     .maybeSingle()
   if (error) return jsonError('이미지 정보를 불러오지 못했습니다.', 500)
-  if (!image) return jsonError('등록된 이미지가 없습니다.', 404)
+  if (!image) {
+    return new Response(null, {
+      status: 204,
+      headers: { 'Cache-Control': 'private, no-store' },
+    })
+  }
 
   const signed = await context.client.storage
     .from(bucket)

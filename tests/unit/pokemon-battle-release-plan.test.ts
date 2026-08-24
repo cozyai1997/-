@@ -47,10 +47,13 @@ describe('Pokemon battle data production plan', () => {
       '테라타입: 전기',
       '거다이맥스 인자 보유',
       'private image upload/read/delete',
-      'console error 0건·실패 network 0건',
+      '이미지 미등록/삭제 후 GET /api/private-images는 204 No Content',
+      'unexpected console error 0건·unexpected failed network 0건',
+      'HP/공격/방어/특공/특방/스피드',
     ]) {
       expect(plan).toContain(exactEvidence)
     }
+    expect(plan).not.toContain('HP/공격/방어/특수공격/특수방어/스피드')
   })
 
   it('documents Stellar with the canonical zero-based sort order', () => {
