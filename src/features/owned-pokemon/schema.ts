@@ -1,14 +1,6 @@
-export const statKeys = [
-  'hp',
-  'attack',
-  'defense',
-  'special_attack',
-  'special_defense',
-  'speed',
-] as const
+import { statKeys, type StatBlock } from '../stats/types'
 
-export type StatKey = (typeof statKeys)[number]
-export type StatBlock = Record<StatKey, number>
+export { statKeys, type StatBlock } from '../stats/types'
 
 export type OwnedPokemonInput = {
   speciesId: string
@@ -25,6 +17,8 @@ export type OwnedPokemonInput = {
   ev: StatBlock
   heldItemId: string | null
   notes: string
+  teraTypeId?: string | null
+  hasGigantamaxFactor?: boolean
   currentMoves: Array<{ moveId: string }>
   targetMoves: Array<{ moveId: string; conditionKo: string }>
 }

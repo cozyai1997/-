@@ -1,7 +1,7 @@
 import { emptyStatBlock, statKeys, type OwnedPokemonInput, type StatBlock } from './schema'
 
-export const registrationDraftKey = 'pokemon-registration-draft-v2'
-const legacyRegistrationDraftKey = 'pokemon-registration-draft-v1'
+export const registrationDraftKey = 'pokemon-registration-draft-v3'
+const legacyRegistrationDraftKeys = ['pokemon-registration-draft-v2', 'pokemon-registration-draft-v1']
 
 export type RegistrationDraft = OwnedPokemonInput & { step: number }
 
@@ -22,13 +22,15 @@ export function createRegistrationDraft(): RegistrationDraft {
     ev: emptyStatBlock(),
     heldItemId: null,
     notes: '',
+    teraTypeId: null,
+    hasGigantamaxFactor: false,
     currentMoves: [],
     targetMoves: [],
   }
 }
 
 export function readRegistrationDraft(storage: Pick<Storage, 'getItem'>) {
-  for (const key of [registrationDraftKey, legacyRegistrationDraftKey]) {
+  for (const key of [registrationDraftKey, ...legacyRegistrationDraftKeys]) {
     const saved = storage.getItem(key)
     if (!saved) continue
     try {
@@ -61,6 +63,11 @@ export function readRegistrationDraft(storage: Pick<Storage, 'getItem'>) {
         ev: normalizeStatBlock(parsed.ev, defaults.ev),
         heldItemId: nullableStringOrDefault(parsed.heldItemId, defaults.heldItemId),
         notes: stringOrDefault(parsed.notes, defaults.notes),
+        teraTypeId: nullableIdOrDefault(parsed.teraTypeId, defaults.teraTypeId ?? null),
+        hasGigantamaxFactor: booleanOrDefault(
+          parsed.hasGigantamaxFactor,
+          defaults.hasGigantamaxFactor ?? false,
+        ),
         currentMoves: normalizeCurrentMoves(parsed.currentMoves),
         targetMoves: normalizeTargetMoves(parsed.targetMoves),
       }
@@ -81,6 +88,8 @@ export function reconcileSpeciesSelection(
     speciesId,
     formId,
     abilityId: null,
+    teraTypeId: null,
+    hasGigantamaxFactor: false,
     currentMoves: [],
     targetMoves: [],
   }
@@ -126,6 +135,23 @@ export function reconcileFilteredSelections(
   }
 }
 
+export function reconcileBattleSelections(
+  draft: RegistrationDraft,
+  battle: {
+    teraTypes: ReadonlyArray<{ id: string; nameKo: string }>
+    canGigantamax: boolean
+  },
+): RegistrationDraft {
+  const allowedTeraTypeIds = new Set(battle.teraTypes.map((teraType) => teraType.id))
+  return {
+    ...draft,
+    teraTypeId: draft.teraTypeId && allowedTeraTypeIds.has(draft.teraTypeId)
+      ? draft.teraTypeId
+      : null,
+    hasGigantamaxFactor: battle.canGigantamax ? draft.hasGigantamaxFactor : false,
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -143,6 +169,15 @@ function nullableStringOrDefault(
   fallback: string | null,
 ): string | null {
   return value === null || typeof value === 'string' ? value : fallback
+}
+
+function nullableIdOrDefault(value: unknown, fallback: string | null): string | null {
+  if (value === null) return null
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback
+}
+
+function booleanOrDefault(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
 }
 
 function normalizeStatBlock(value: unknown, fallback: StatBlock): StatBlock {

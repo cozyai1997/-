@@ -21,6 +21,7 @@ export type StatBlock = Record<StatKey, number>
 export type BaseStats = StatBlock
 export type CalculatedStats = StatBlock
 export type NatureMultiplier = 0.9 | 1 | 1.1
+export type HpRule = 'standard' | 'fixed-one'
 
 export type NatureAdjustment = {
   increased: NonHpStatKey | null
@@ -33,6 +34,7 @@ export type StatCalculationInput = {
   ev: StatBlock
   level: number
   nature: NatureAdjustment
+  hpRule?: HpRule
 }
 
 export type TrainingValidationInput = Omit<StatCalculationInput, 'nature'>

@@ -4,6 +4,7 @@ import {
   createRegistrationDraft,
   readRegistrationDraft,
   reconcileFormSelection,
+  reconcileBattleSelections,
   reconcileSpeciesSelection,
   registrationDraftKey,
 } from '@/features/owned-pokemon/registration-state'
@@ -18,12 +19,37 @@ function storageWith(values: Record<string, string>): Pick<Storage, 'getItem'> {
 }
 
 describe('포켓몬 등록 임시 저장', () => {
-  it('v2 키와 빈 기술 배열을 기본값으로 사용한다', () => {
-    expect(registrationDraftKey).toBe('pokemon-registration-draft-v2')
-    expect(createRegistrationDraft()).toMatchObject({ currentMoves: [], targetMoves: [] })
+  it('v3 키와 전투 기본값 및 빈 기술 배열을 사용한다', () => {
+    expect(registrationDraftKey).toBe('pokemon-registration-draft-v3')
+    expect(createRegistrationDraft()).toMatchObject({
+      currentMoves: [],
+      targetMoves: [],
+      teraTypeId: null,
+      hasGigantamaxFactor: false,
+    })
   })
 
-  it('v1 임시 저장에 새 기술 기본값을 병합한다', () => {
+  it('v2 임시 저장을 v3 전투 기본값과 함께 복원한다', () => {
+    const draft = readRegistrationDraft(storageWith({
+      'pokemon-registration-draft-v2': JSON.stringify({
+        step: 3,
+        speciesId: 'species-v2',
+        formId: 'form-v2',
+        abilityId: 'ability-v2',
+      }),
+    }))
+
+    expect(draft).toMatchObject({
+      step: 3,
+      speciesId: 'species-v2',
+      formId: 'form-v2',
+      abilityId: 'ability-v2',
+      teraTypeId: null,
+      hasGigantamaxFactor: false,
+    })
+  })
+
+  it('v1 임시 저장에 v3 전투 기본값을 병합한다', () => {
     const draft = readRegistrationDraft(storageWith({
       'pokemon-registration-draft-v1': JSON.stringify({
         step: 3,
@@ -40,6 +66,8 @@ describe('포켓몬 등록 임시 저장', () => {
       abilityId: 'ability-old',
       currentMoves: [],
       targetMoves: [],
+      teraTypeId: null,
+      hasGigantamaxFactor: false,
     })
   })
 
@@ -92,6 +120,8 @@ describe('포켓몬 등록 임시 저장', () => {
         originalIv: null,
         effectiveIv: { hp: 20 },
         ev: 'broken',
+        teraTypeId: 25,
+        hasGigantamaxFactor: 'yes',
       }),
     }))
 
@@ -104,16 +134,20 @@ describe('포켓몬 등록 임시 저장', () => {
       hp: 20,
     })
     expect(draft.ev).toEqual(createRegistrationDraft().ev)
+    expect(draft.teraTypeId).toBeNull()
+    expect(draft.hasGigantamaxFactor).toBe(false)
   })
 })
 
 describe('종·모습 선택 정합성', () => {
-  it('종이 바뀌면 특성·현재 기술·목표 기술을 모두 지운다', () => {
+  it('종이 바뀌면 특성·기술·테라타입·거다이맥스 인자를 모두 지운다', () => {
     const draft = {
       ...createRegistrationDraft(),
       speciesId: 'old-species',
       formId: 'old-form',
       abilityId: 'ability',
+      teraTypeId: 'tera',
+      hasGigantamaxFactor: true,
       currentMoves: [{ moveId: 'current' }],
       targetMoves: [{ moveId: 'target', conditionKo: '유전으로 습득' }],
     }
@@ -122,6 +156,8 @@ describe('종·모습 선택 정합성', () => {
       speciesId: 'new-species',
       formId: 'new-form',
       abilityId: null,
+      teraTypeId: null,
+      hasGigantamaxFactor: false,
       currentMoves: [],
       targetMoves: [],
     })
@@ -195,6 +231,38 @@ describe('종·모습 선택 정합성', () => {
       abilityId: 'allowed-ability',
       currentMoves: [{ moveId: 'allowed-move' }],
       targetMoves: [{ moveId: 'allowed-move', conditionKo: '레벨 5에 습득' }],
+    })
+  })
+
+  it('전투 선택 정합화는 현재 폼에서 허용된 테라타입과 거다이맥스 인자만 유지한다', () => {
+    const draft = {
+      ...createRegistrationDraft(),
+      teraTypeId: 'water',
+      hasGigantamaxFactor: true,
+    }
+
+    expect(reconcileBattleSelections(draft, {
+      teraTypes: [{ id: 'water', nameKo: '물' }],
+      canGigantamax: true,
+    })).toMatchObject({
+      teraTypeId: 'water',
+      hasGigantamaxFactor: true,
+    })
+  })
+
+  it('전투 선택 정합화는 허용되지 않은 테라타입과 불가능한 거다이맥스 인자를 지운다', () => {
+    const draft = {
+      ...createRegistrationDraft(),
+      teraTypeId: 'fire',
+      hasGigantamaxFactor: true,
+    }
+
+    expect(reconcileBattleSelections(draft, {
+      teraTypes: [{ id: 'water', nameKo: '물' }],
+      canGigantamax: false,
+    })).toMatchObject({
+      teraTypeId: null,
+      hasGigantamaxFactor: false,
     })
   })
 })

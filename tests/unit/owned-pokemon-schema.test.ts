@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
 import { createRegistrationDraft } from '@/features/owned-pokemon/registration-state'
-import { validateOwnedPokemon } from '@/features/owned-pokemon/schema'
+import { validateOwnedPokemon, type StatBlock as SchemaStatBlock } from '@/features/owned-pokemon/schema'
+import type { StatBlock as SharedStatBlock } from '@/features/stats/types'
 
 function validDraft() {
   return { ...createRegistrationDraft(), speciesId: 'species', formId: 'form' }
 }
 
 describe('보유 포켓몬 입력 검증', () => {
+  it('등록 스키마는 공통 StatBlock 타입을 다시 내보낸다', () => {
+    const shared: SharedStatBlock = { hp: 1, attack: 2, defense: 3, special_attack: 4, special_defense: 5, speed: 6 }
+    const schema: SchemaStatBlock = shared
+
+    expect(schema).toEqual(shared)
+  })
+
   it('정상 입력을 허용한다', () => {
     expect(validateOwnedPokemon(validDraft())).toEqual([])
   })

@@ -26,7 +26,9 @@ export function calculateOtherStat(
 
 export function calculateAllStats(input: StatCalculationInput): CalculatedStats {
   const result = {
-    hp: calculateHpStat(input.baseStats.hp, input.iv.hp, input.ev.hp, input.level),
+    hp: input.hpRule === 'fixed-one'
+      ? 1
+      : calculateHpStat(input.baseStats.hp, input.iv.hp, input.ev.hp, input.level),
     attack: 0,
     defense: 0,
     special_attack: 0,
