@@ -434,6 +434,17 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
       runLocalSql(`update public.reference_option_filter_publication_staging
         set payload = jsonb_set(payload, '{identifier}', '"normal"')
         where batch_id = '${batchId}' and row_kind = 'tera_type' and source_order = 0;`)
+      runLocalSql(`update public.reference_option_filter_publication_staging
+        set payload = jsonb_set(payload, '{sort_order}', '-1')
+        where batch_id = '${batchId}' and row_kind = 'tera_type' and source_order = 0;`)
+      const invalidOrder = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+        p_publication_id: ids.publication,
+        p_batch_id: batchId,
+      })
+      expect(invalidOrder.error?.message).toContain('identifier-to-sort-order')
+      runLocalSql(`update public.reference_option_filter_publication_staging
+        set payload = jsonb_set(payload, '{sort_order}', '0')
+        where batch_id = '${batchId}' and row_kind = 'tera_type' and source_order = 0;`)
       const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
         p_publication_id: ids.publication,
         p_batch_id: batchId,
@@ -559,33 +570,24 @@ $swap$;`)
     expect(retiredOptions.count).toBe(0)
     expect(obsolete.data).toEqual({ publication_id: ids.publication, is_active: false })
 
-    const beforeIdempotent = await Promise.all([
-      admin.from('reference_tera_types').select('id,identifier,reference_type_id,sort_order,is_active')
-        .eq('publication_id', ids.publication).order('identifier'),
-      admin.from('reference_moves').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
-      admin.from('reference_forms').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
-      admin.from('reference_form_tera_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
-      admin.from('reference_form_gigantamax_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
-    ])
+    const beforeIdempotent = await admin.rpc('get_pokemon_option_filter_reference_digest', {
+      p_publication_id: ids.publication,
+    })
+    expect(beforeIdempotent.error).toBeNull()
     runLocalSql(stagedRowsSql(ids.thirdSuccessfulBatch, false))
     const idempotent = await admin.rpc('replace_pokemon_option_filter_reference_data', {
       p_publication_id: ids.publication,
       p_batch_id: ids.thirdSuccessfulBatch,
     })
     expect(idempotent.error).toBeNull()
-    const afterIdempotent = await Promise.all([
-      admin.from('reference_tera_types').select('id,identifier,reference_type_id,sort_order,is_active')
-        .eq('publication_id', ids.publication).order('identifier'),
-      admin.from('reference_moves').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
-      admin.from('reference_forms').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
-      admin.from('reference_form_tera_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
-      admin.from('reference_form_gigantamax_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+    const [afterIdempotent, stagingResidue] = await Promise.all([
+      admin.rpc('get_pokemon_option_filter_reference_digest', { p_publication_id: ids.publication }),
       admin.from('reference_option_filter_publication_staging').select('*', { count: 'exact', head: true })
         .eq('publication_id', ids.publication),
     ])
-    expect(afterIdempotent.slice(0, 5).map(({ data, count }) => ({ data, count })))
-      .toEqual(beforeIdempotent.map(({ data, count }) => ({ data, count })))
-    expect(afterIdempotent[5].count).toBe(0)
+    expect(afterIdempotent.error).toBeNull()
+    expect(afterIdempotent.data).toEqual(beforeIdempotent.data)
+    expect(stagingResidue.count).toBe(0)
   }, 60_000)
 
   it('은퇴 게시본은 교체 대상으로 받지 않는다', async () => {

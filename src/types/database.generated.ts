@@ -1108,6 +1108,10 @@ export type Database = {
         }
         Returns: string
       }
+      get_pokemon_option_filter_reference_digest: {
+        Args: { p_publication_id: string }
+        Returns: Json
+      }
       replace_pokemon_option_filter_reference_data: {
         Args: { p_batch_id: string; p_publication_id: string }
         Returns: undefined

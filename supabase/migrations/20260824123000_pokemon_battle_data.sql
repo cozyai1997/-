@@ -166,6 +166,7 @@ declare
   staged_tera_types integer;
   staged_tera_options integer;
   staged_gmax_options integer;
+  target_tera_rows integer;
   applied integer;
 begin
   if not exists (select 1 from public.data_publications where id = p_publication_id and status = 'active') then
@@ -306,6 +307,23 @@ begin
   end if;
 
   if exists (
+    select 1
+    from public.reference_option_filter_publication_staging as staged
+    join (values
+      ('normal', 0), ('fighting', 1), ('flying', 2), ('poison', 3), ('ground', 4),
+      ('rock', 5), ('bug', 6), ('ghost', 7), ('steel', 8), ('fire', 9), ('water', 10),
+      ('grass', 11), ('electric', 12), ('psychic', 13), ('ice', 14), ('dragon', 15),
+      ('dark', 16), ('fairy', 17), ('stellar', 18)
+    ) as canonical(identifier, sort_order)
+      on canonical.identifier = staged.payload ->> 'identifier'
+    where staged.batch_id = p_batch_id and staged.publication_id = p_publication_id
+      and staged.row_kind = 'tera_type'
+      and (staged.payload ->> 'sort_order')::smallint <> canonical.sort_order
+  ) then
+    raise invalid_parameter_value using message = 'staged tera types must use canonical identifier-to-sort-order mapping';
+  end if;
+
+  if exists (
     select 1 from public.reference_option_filter_publication_staging as staged
     left join public.reference_types as type
       on type.id = nullif(staged.payload ->> 'reference_type_id', '')::uuid
@@ -433,13 +451,19 @@ begin
   -- obsolete target row occupying a canonical slot and canonical-row order
   -- swaps safe while stable identifier UUIDs move into this publication.
   set constraints public.reference_tera_types_publication_id_sort_order_key deferred;
+  select count(*) into target_tera_rows
+  from public.reference_tera_types
+  where publication_id = p_publication_id;
+  if target_tera_rows > 32768 then
+    raise check_violation using message = 'target publication has too many tera types for temporary sort allocation';
+  end if;
   with target_rows as materialized (
     select id, row_number() over (order by id) as position
     from public.reference_tera_types
     where publication_id = p_publication_id
   )
   update public.reference_tera_types as tera
-  set sort_order = (-32768 + target_rows.position)::smallint
+  set sort_order = (-target_rows.position)::smallint
   from target_rows
   where tera.id = target_rows.id;
 
@@ -457,6 +481,17 @@ begin
   set is_active = false
   where publication_id = p_publication_id
     and identifier <> all (array['bug','dark','dragon','electric','fairy','fighting','fire','flying','ghost','grass','ground','ice','normal','poison','psychic','rock','steel','stellar','water']);
+
+  with obsolete_rows as materialized (
+    select id, row_number() over (order by id) as position
+    from public.reference_tera_types
+    where publication_id = p_publication_id
+      and identifier <> all (array['bug','dark','dragon','electric','fairy','fighting','fire','flying','ghost','grass','ground','ice','normal','poison','psychic','rock','steel','stellar','water'])
+  )
+  update public.reference_tera_types as tera
+  set sort_order = (-obsolete_rows.position)::smallint
+  from obsolete_rows
+  where tera.id = obsolete_rows.id;
 
   with staged_tera as materialized (
     select payload ->> 'tera_type_id' as staged_id, payload ->> 'identifier' as identifier
@@ -501,6 +536,33 @@ $$;
 revoke all on function public.replace_pokemon_option_filter_reference_data(uuid, uuid)
   from public, anon, authenticated;
 grant execute on function public.replace_pokemon_option_filter_reference_data(uuid, uuid) to service_role;
+
+create function public.get_pokemon_option_filter_reference_digest(p_publication_id uuid)
+returns jsonb
+language sql stable security invoker set search_path = ''
+as $$
+  select jsonb_object_agg(collection, content_digest)
+  from (
+    select 'moves'::text as collection, md5(coalesce(string_agg(to_jsonb(row_value)::text, '' order by to_jsonb(row_value)::text), '')) as content_digest
+      from public.reference_moves as row_value where publication_id = p_publication_id
+    union all select 'forms', md5(coalesce(string_agg(to_jsonb(row_value)::text, '' order by to_jsonb(row_value)::text), ''))
+      from public.reference_forms as row_value where publication_id = p_publication_id
+    union all select 'natures', md5(coalesce(string_agg(to_jsonb(row_value)::text, '' order by to_jsonb(row_value)::text), ''))
+      from public.reference_natures as row_value where publication_id = p_publication_id
+    union all select 'tera_types', md5(coalesce(string_agg(to_jsonb(row_value)::text, '' order by to_jsonb(row_value)::text), ''))
+      from public.reference_tera_types as row_value where publication_id = p_publication_id
+    union all select 'tera_options', md5(coalesce(string_agg(to_jsonb(row_value)::text, '' order by to_jsonb(row_value)::text), ''))
+      from public.reference_form_tera_options as row_value where publication_id = p_publication_id
+    union all select 'gigantamax_options', md5(coalesce(string_agg(to_jsonb(row_value)::text, '' order by to_jsonb(row_value)::text), ''))
+      from public.reference_form_gigantamax_options as row_value where publication_id = p_publication_id
+    union all select 'form_abilities', md5(coalesce(string_agg((to_jsonb(row_value) - 'id')::text, '' order by (to_jsonb(row_value) - 'id')::text), ''))
+      from public.reference_form_abilities as row_value where publication_id = p_publication_id
+    union all select 'learnsets', md5(coalesce(string_agg((to_jsonb(row_value) - 'id')::text, '' order by (to_jsonb(row_value) - 'id')::text), ''))
+      from public.reference_move_learnsets as row_value where publication_id = p_publication_id
+  ) as digests;
+$$;
+revoke all on function public.get_pokemon_option_filter_reference_digest(uuid) from public, anon, authenticated;
+grant execute on function public.get_pokemon_option_filter_reference_digest(uuid) to service_role;
 
 alter table public.owned_pokemon
   add column tera_type_id uuid references public.reference_tera_types(id) on delete restrict,

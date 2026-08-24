@@ -104,6 +104,28 @@ pnpm typecheck
 
 No unresolved concerns.
 
+## Review fix: bounded ordering and full idempotence digest
+
+### RED
+
+- An initial full digest exposed that `form_abilities` and `learnsets` receive regenerated surrogate relation IDs during replacement. The digest now compares their complete logical rows while excluding only those generated `id` fields; all other replaced collection fields remain covered.
+- The first staged successful batch now rejects both a count-correct noncanonical identifier and a canonical identifier with `sort_order = -1` before restoring the approved mapping and continuing the same batch.
+
+### GREEN
+
+- Clean local reset applied the migration successfully.
+- Atomic suite: 4/4 passed in 71.46s total. Each heavy case remained below the 60s RPC/test gateway: late rollback 10.857s, canonical mapping/full replacement 22.236s, and rotation plus no-intervening full-content digest idempotence 32.849s.
+- RLS smoke: 6/6 passed in 5.38s. Owned-Pokemon smoke: 17/17 passed in 2.92s.
+- `pnpm supabase db lint --local`: `No schema errors found`; generated database types and `pnpm typecheck` passed.
+
+### Review changes
+
+- Staged Tera rows must now match the exact approved identifier-to-nonnegative-sort-order mapping (`normal=0` through `stellar=18`).
+- Temporary target slots use the clear bounded allocator `-row_number()` after a `<= 32,768` target-row guard. Final obsolete tombstones are independently renumbered by stable UUID order into the same negative range, so canonical UUID order cannot perturb their state.
+- A service-role-only server digest covers moves, forms/base-battle profiles, natures, Tera types/options, Gigantamax options, form abilities, and learnsets. The idempotence regression asserts equal deterministic digests and empty staging after the no-intervening replacement.
+
+No unresolved concerns.
+
 ## Review fix: lifecycle ordering and idempotence
 
 ### RED
