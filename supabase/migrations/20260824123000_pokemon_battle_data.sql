@@ -63,10 +63,10 @@ create table public.reference_form_gigantamax_options (
     references public.reference_forms(publication_id, id) on delete cascade
 );
 
-create index reference_form_tera_options_form_idx
-  on public.reference_form_tera_options (publication_id, form_id);
-create index reference_form_gigantamax_options_source_idx
-  on public.reference_form_gigantamax_options (publication_id, source_form_id);
+create index reference_form_tera_options_tera_type_idx
+  on public.reference_form_tera_options (publication_id, tera_type_id);
+create index reference_form_gigantamax_options_target_idx
+  on public.reference_form_gigantamax_options (publication_id, gigantamax_form_id);
 create index reference_option_filter_staging_batch_kind_tera_type_idx
   on public.reference_option_filter_publication_staging
   (batch_id, publication_id, row_kind, ((payload ->> 'tera_type_id')));
@@ -297,6 +297,14 @@ begin
     raise invalid_parameter_value using message = 'staged tera types must have unique identifiers and sort order';
   end if;
 
+  if (select array_agg(identifier order by identifier) from (
+    select payload ->> 'identifier' as identifier
+    from public.reference_option_filter_publication_staging
+    where batch_id = p_batch_id and publication_id = p_publication_id and row_kind = 'tera_type'
+  ) as staged_identifiers) <> array['bug','dark','dragon','electric','fairy','fighting','fire','flying','ghost','grass','ground','ice','normal','poison','psychic','rock','steel','stellar','water'] then
+    raise invalid_parameter_value using message = 'staged tera types must use the canonical 19 identifiers';
+  end if;
+
   if exists (
     select 1 from public.reference_option_filter_publication_staging as staged
     left join public.reference_types as type
@@ -313,13 +321,17 @@ begin
     select 1 from public.reference_option_filter_publication_staging as option
     left join public.reference_forms as form
       on form.id = (option.payload ->> 'form_id')::uuid and form.publication_id = p_publication_id
+    left join public.reference_option_filter_publication_staging as profile
+      on profile.batch_id = p_batch_id and profile.publication_id = p_publication_id
+      and profile.row_kind = 'form_battle_profile'
+      and profile.payload ->> 'form_id' = option.payload ->> 'form_id'
     left join public.reference_option_filter_publication_staging as tera
       on tera.batch_id = p_batch_id and tera.publication_id = p_publication_id
       and tera.row_kind = 'tera_type'
       and tera.payload ->> 'tera_type_id' = option.payload ->> 'tera_type_id'
     where option.batch_id = p_batch_id and option.publication_id = p_publication_id
       and option.row_kind = 'form_tera_option'
-      and (form.id is null or form.is_battle_only or tera.id is null)
+      and (form.id is null or coalesce((profile.payload ->> 'is_battle_only')::boolean, true) or tera.id is null)
   ) then
     raise invalid_parameter_value using message = 'staged form tera option is invalid';
   end if;
@@ -343,9 +355,19 @@ begin
       on source_form.id = (staged.payload ->> 'source_form_id')::uuid and source_form.publication_id = p_publication_id
     left join public.reference_forms as target_form
       on target_form.id = (staged.payload ->> 'gigantamax_form_id')::uuid and target_form.publication_id = p_publication_id
+    left join public.reference_option_filter_publication_staging as source_profile
+      on source_profile.batch_id = p_batch_id and source_profile.publication_id = p_publication_id
+      and source_profile.row_kind = 'form_battle_profile'
+      and source_profile.payload ->> 'form_id' = staged.payload ->> 'source_form_id'
+    left join public.reference_option_filter_publication_staging as target_profile
+      on target_profile.batch_id = p_batch_id and target_profile.publication_id = p_publication_id
+      and target_profile.row_kind = 'form_battle_profile'
+      and target_profile.payload ->> 'form_id' = staged.payload ->> 'gigantamax_form_id'
     where staged.batch_id = p_batch_id and staged.publication_id = p_publication_id
       and staged.row_kind = 'form_gigantamax_option'
-      and (source_form.id is null or target_form.id is null or source_form.species_id <> target_form.species_id)
+      and (source_form.id is null or target_form.id is null or source_form.species_id <> target_form.species_id
+        or coalesce((source_profile.payload ->> 'is_battle_only')::boolean, true)
+        or not coalesce((target_profile.payload ->> 'is_battle_only')::boolean, false))
   ) then
     raise invalid_parameter_value using message = 'staged gigantamax option is invalid';
   end if;
@@ -395,6 +417,16 @@ begin
   get diagnostics applied = row_count;
   if applied <> 25 then raise check_violation using message = 'nature update count mismatch'; end if;
 
+  -- Stable Tera UUIDs may move between publications. Delete every dependent
+  -- relation before moving its publication_id, but never delete the Tera row
+  -- itself because owned_pokemon retains that UUID.
+  delete from public.reference_form_tera_options as option
+  using public.reference_tera_types as tera,
+    public.reference_option_filter_publication_staging as staged
+  where option.tera_type_id = tera.id
+    and staged.batch_id = p_batch_id and staged.publication_id = p_publication_id
+    and staged.row_kind = 'tera_type'
+    and staged.payload ->> 'identifier' = tera.identifier;
   delete from public.reference_form_tera_options where publication_id = p_publication_id;
   insert into public.reference_tera_types (id, publication_id, identifier, name_ko, reference_type_id, sort_order, is_active)
   select (payload ->> 'tera_type_id')::uuid, p_publication_id, payload ->> 'identifier', payload ->> 'name_ko',
@@ -405,6 +437,11 @@ begin
   order by source_order
   on conflict (identifier) do update set publication_id = excluded.publication_id, name_ko = excluded.name_ko,
     reference_type_id = excluded.reference_type_id, sort_order = excluded.sort_order, is_active = excluded.is_active;
+
+  update public.reference_tera_types
+  set is_active = false
+  where publication_id = p_publication_id
+    and identifier <> all (array['bug','dark','dragon','electric','fairy','fighting','fire','flying','ghost','grass','ground','ice','normal','poison','psychic','rock','steel','stellar','water']);
 
   with staged_tera as materialized (
     select payload ->> 'tera_type_id' as staged_id, payload ->> 'identifier' as identifier
@@ -463,14 +500,13 @@ as $$
 declare
   active_publication_id uuid;
   selected_battle_only boolean;
-  choices_changed boolean := tg_op = 'INSERT'
-    or new.tera_type_id is distinct from old.tera_type_id
-    or new.has_gigantamax_factor is distinct from old.has_gigantamax_factor;
+  tera_changed boolean := tg_op = 'INSERT' or new.tera_type_id is distinct from old.tera_type_id;
+  gigantamax_changed boolean := tg_op = 'INSERT' or new.has_gigantamax_factor is distinct from old.has_gigantamax_factor;
   form_changed boolean := tg_op = 'INSERT'
     or new.species_id is distinct from old.species_id
     or new.form_id is distinct from old.form_id;
 begin
-  if not form_changed and not choices_changed then return new; end if;
+  if not form_changed and not tera_changed and not gigantamax_changed then return new; end if;
   select id into active_publication_id from public.data_publications where status = 'active';
   if active_publication_id is null then
     if new.tera_type_id is not null or new.has_gigantamax_factor then
@@ -499,14 +535,14 @@ begin
     select 1 from public.reference_form_tera_options
     where publication_id = active_publication_id and form_id = new.form_id and tera_type_id = new.tera_type_id
   ) then
-    if choices_changed then raise invalid_parameter_value using message = '선택한 테라타입은 현재 모습에서 허용되지 않습니다.'; end if;
+    if tera_changed then raise invalid_parameter_value using message = '선택한 테라타입은 현재 모습에서 허용되지 않습니다.'; end if;
     new.tera_type_id := null;
   end if;
   if new.has_gigantamax_factor and not exists (
     select 1 from public.reference_form_gigantamax_options
     where publication_id = active_publication_id and source_form_id = new.form_id
   ) then
-    if choices_changed then raise invalid_parameter_value using message = '현재 모습은 거다이맥스 인자를 가질 수 없습니다.'; end if;
+    if gigantamax_changed then raise invalid_parameter_value using message = '현재 모습은 거다이맥스 인자를 가질 수 없습니다.'; end if;
     new.has_gigantamax_factor := false;
   end if;
   return new;

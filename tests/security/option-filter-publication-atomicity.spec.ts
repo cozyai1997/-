@@ -16,6 +16,9 @@ const ids = {
   failedBatch: randomUUID(),
   firstSuccessfulBatch: randomUUID(),
   secondSuccessfulBatch: randomUUID(),
+  rotationBatch: randomUUID(),
+  rotationSpecies: randomUUID(),
+  rotationForm: randomUUID(),
   type: randomUUID(),
   species: randomUUID(),
   baseForm: randomUUID(),
@@ -23,6 +26,13 @@ const ids = {
   ability: randomUUID(),
   move: randomUUID(),
 }
+
+let rotationOwnerId: string | null = null
+
+const canonicalTeraIdentifiers = [
+  'normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel',
+  'fire', 'water', 'grass', 'electric', 'psychic', 'ice', 'dragon', 'dark', 'fairy', 'stellar',
+] as const
 
 function localEnvironment(): LocalEnvironment {
   const cliPath = resolve(process.cwd(), 'node_modules/supabase/dist/supabase.js')
@@ -176,7 +186,7 @@ begin
       'form_id', null,
       'move_identifier', 'atomic-move-' || (value % 826) || '-${ids.publication}',
       'learn_method', 'level',
-      'learn_level', case when ${failAfterMutableWrites ? 'value = 116518' : 'false'} then 101 else 0 end,
+      'learn_level', 0,
       'condition_ko', '레벨 상승으로 습득'
     )
   from generate_series(0, 116518) as value;
@@ -220,16 +230,16 @@ begin
   insert into public.reference_option_filter_publication_staging (
     batch_id, publication_id, row_kind, source_order, payload
   )
-  select '${batchId}', '${ids.publication}', 'tera_type', value,
+  select '${batchId}', '${ids.publication}', 'tera_type', ordinality - 1,
     jsonb_build_object(
       'tera_type_id', gen_random_uuid(),
-      'identifier', 'atomic-tera-' || value || '-${ids.publication}',
-      'name_ko', '테라 ' || value,
-      'reference_type_id', case when value = 18 then null else '${ids.type}'::uuid end,
-      'sort_order', value,
+      'identifier', identifier,
+      'name_ko', '테라 ' || identifier,
+      'reference_type_id', case when identifier = 'stellar' then null else '${ids.type}'::uuid end,
+      'sort_order', ordinality - 1,
       'is_active', true
     )
-  from generate_series(0, 18) as value;
+  from unnest(array['${canonicalTeraIdentifiers.join("','")}']) with ordinality as tera(identifier, ordinality);
 
   insert into public.reference_option_filter_publication_staging (
     batch_id, publication_id, row_kind, source_order, payload
@@ -265,6 +275,16 @@ begin
     cross join (select id from public.reference_forms where publication_id = '${ids.publication}' order by id desc limit 42) as target
     limit 42
   ) as staged_gmax;
+
+  ${failAfterMutableWrites ? `update public.reference_option_filter_publication_staging as duplicate
+  set payload = original.payload
+  from public.reference_option_filter_publication_staging as original
+  where duplicate.batch_id = '${batchId}'
+    and duplicate.row_kind = 'form_tera_option'
+    and duplicate.source_order = 25183
+    and original.batch_id = '${batchId}'
+    and original.row_kind = 'form_tera_option'
+    and original.source_order = 0;` : ''}
 end
 $stage$;`
 }
@@ -300,6 +320,7 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
     const collect = (label: string, error: { message?: string } | null) => {
       if (error) failures.push(`${label}: ${error.message ?? '알 수 없는 오류'}`)
     }
+    if (rotationOwnerId) collect('회전 소유자 삭제', (await admin.auth.admin.deleteUser(rotationOwnerId)).error)
     collect('시험 게시본 은퇴', (await admin
       .from('data_publications')
       .update({ status: 'retired' })
@@ -347,10 +368,12 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
       .from('reference_forms')
       .update({ base_form_id: null })
       .eq('publication_id', ids.publication)).error)
+    collect('은퇴 회전 모습 삭제', (await admin.from('reference_forms').delete().eq('id', ids.rotationForm)).error)
     collect('모습 삭제', (await admin
       .from('reference_forms')
       .delete()
       .eq('publication_id', ids.publication)).error)
+    collect('은퇴 회전 종 삭제', (await admin.from('reference_species').delete().eq('id', ids.rotationSpecies)).error)
     collect('종 삭제', (await admin.from('reference_species').delete().eq('id', ids.species)).error)
     collect('타입 삭제', (await admin.from('reference_types').delete().eq('id', ids.type)).error)
     collect('게시본 삭제', (await admin
@@ -371,13 +394,13 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
     if (failures.length) throw new Error(`원자 교체 픽스처 정리 실패\n${failures.join('\n')}`)
   })
 
-  it('후반 learnset 제약 실패가 먼저 적용한 move/base-link까지 롤백한다', async () => {
+  it('후반 Tera 옵션 PK 실패가 먼저 적용한 move/base-link까지 롤백한다', async () => {
     runLocalSql(stagedRowsSql(ids.failedBatch, true))
     const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
       p_publication_id: ids.publication,
       p_batch_id: ids.failedBatch,
     })
-    expect(replacement.error?.code).toBe('23514')
+    expect(replacement.error?.code).toBe('23505')
 
     const [move, form, abilities, learnsets] = await Promise.all([
       admin.from('reference_moves').select('name_ko').eq('id', ids.move).single(),
@@ -389,6 +412,14 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
     expect(form.data).toEqual({ base_form_id: null })
     expect(abilities.data).toEqual([{ ability_id: ids.ability }])
     expect(learnsets.data).toEqual([{ move_id: ids.move, learn_level: 0 }])
+    runLocalSql(`update public.reference_option_filter_publication_staging
+      set payload = jsonb_set(payload, '{identifier}', '"count-correct-but-invalid"')
+      where batch_id = '${ids.failedBatch}' and row_kind = 'tera_type' and source_order = 0;`)
+    const canonicalSet = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+      p_publication_id: ids.publication,
+      p_batch_id: ids.failedBatch,
+    })
+    expect(canonicalSet.error?.message).toContain('canonical 19')
     const cleanup = await admin
       .from('reference_option_filter_publication_staging')
       .delete()
@@ -432,6 +463,77 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
     expect(move.data).toEqual({ name_ko: '새 기술 0' })
     expect(form.data).toEqual({ base_form_id: ids.baseForm })
     expect(stagingResidue.count).toBe(0)
+  }, 60_000)
+
+  it('이전 게시본의 전투 관계를 지운 뒤 Tera 안정 UUID를 새 active 게시본으로 회전한다', async () => {
+    const normal = await admin.from('reference_tera_types')
+      .select('id').eq('publication_id', ids.publication).eq('identifier', 'normal').single()
+    expect(normal.error).toBeNull()
+    const option = await admin.from('reference_form_tera_options')
+      .select('form_id').eq('publication_id', ids.publication).eq('tera_type_id', normal.data!.id).limit(1).single()
+    expect(option.error).toBeNull()
+    const selectedForm = await admin.from('reference_forms').select('species_id').eq('id', option.data!.form_id).single()
+    expect(selectedForm.error).toBeNull()
+    const owner = await admin.auth.admin.createUser({
+      email: `atomic-rotation-${randomUUID()}@example.test`,
+      password: `Rotation-${randomUUID()}-A1!`,
+      email_confirm: true,
+    })
+    expect(owner.error).toBeNull()
+    rotationOwnerId = owner.data.user!.id
+    const owned = await admin.from('owned_pokemon').insert({
+      user_id: rotationOwnerId,
+      species_id: selectedForm.data!.species_id,
+      form_id: option.data!.form_id,
+      gender: 'genderless',
+      level: 5,
+      tera_type_id: normal.data!.id,
+    })
+    expect(owned.error).toBeNull()
+
+    expect((await admin.from('reference_form_tera_options')
+      .delete().eq('publication_id', ids.publication).eq('tera_type_id', normal.data!.id)).error).toBeNull()
+    expect((await admin.from('reference_tera_types').update({ reference_type_id: null }).eq('id', normal.data!.id)).error).toBeNull()
+    expect((await admin.from('reference_tera_types')
+      .update({ publication_id: ids.retiredPublication }).eq('id', normal.data!.id)).error).toBeNull()
+    expect((await admin.from('reference_species').insert({
+      id: ids.rotationSpecies,
+      publication_id: ids.retiredPublication,
+      national_dex_number: 9_999,
+      identifier: `atomic-retired-${ids.rotationSpecies}`,
+      name_ko: '이전 회전 종',
+      description_ko: '이전 게시본 관계 검증용',
+    })).error).toBeNull()
+    expect((await admin.from('reference_forms').insert({
+      id: ids.rotationForm,
+      publication_id: ids.retiredPublication,
+      species_id: ids.rotationSpecies,
+      identifier: `atomic-retired-form-${ids.rotationForm}`,
+      name_ko: '이전 회전 모습',
+      is_default: true,
+    })).error).toBeNull()
+    expect((await admin.from('reference_form_tera_options').insert({
+      publication_id: ids.retiredPublication,
+      form_id: ids.rotationForm,
+      tera_type_id: normal.data!.id,
+    })).error).toBeNull()
+
+    runLocalSql(stagedRowsSql(ids.rotationBatch, false))
+    const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+      p_publication_id: ids.publication,
+      p_batch_id: ids.rotationBatch,
+    })
+    expect(replacement.error).toBeNull()
+    const [rotated, ownedAfter, retiredOptions] = await Promise.all([
+      admin.from('reference_tera_types').select('id,publication_id,reference_type_id')
+        .eq('identifier', 'normal').single(),
+      admin.from('owned_pokemon').select('tera_type_id').eq('user_id', rotationOwnerId).single(),
+      admin.from('reference_form_tera_options').select('form_id', { count: 'exact', head: true })
+        .eq('publication_id', ids.retiredPublication).eq('tera_type_id', normal.data!.id),
+    ])
+    expect(rotated.data).toEqual({ id: normal.data!.id, publication_id: ids.publication, reference_type_id: ids.type })
+    expect(ownedAfter.data).toEqual({ tera_type_id: normal.data!.id })
+    expect(retiredOptions.count).toBe(0)
   }, 60_000)
 
   it('은퇴 게시본은 교체 대상으로 받지 않는다', async () => {

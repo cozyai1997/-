@@ -65,3 +65,41 @@ Remove-Item Env:RUN_SUPABASE_INTEGRATION
 - Restored pre-mutation validation for the existing move, form-ability, and learnset staging branches as well as the five battle branches.
 - Added a materialized Tera-ID mapping and staging expression index after the first complete replacement exceeded the local PostgREST 60-second upstream limit. The final service-role RPC test completes inside that limit.
 - No unresolved concerns.
+
+## Review fix
+
+### RED
+
+- Added a count-correct but noncanonical Tera identifier to a full nine-kind staged batch. The replacement RPC rejected it with `staged tera types must use the canonical 19 identifiers`.
+- Added a duplicate final `form_tera_option` after all mutable replacement branches. The RPC reached the late option insert, returned PostgreSQL `23505`, and the test confirmed the prior move, base-form link, ability, and learnset rows were unchanged.
+- The first run of the new field-by-field owned-Pokemon regression failed only on the fixture nickname CHECK constraint (`23514`); shortening the fixture name restored the intended battle-option case.
+
+### GREEN
+
+Commands run after the review changes:
+
+```powershell
+pnpm supabase db reset --local
+pnpm supabase db lint --local
+pnpm supabase gen types typescript --local --schema public > src/types/database.generated.ts
+$env:RUN_SUPABASE_INTEGRATION='1'
+pnpm vitest run tests/security/option-filter-publication-atomicity.spec.ts --reporter=verbose
+pnpm vitest run tests/security/owned-pokemon-transaction.spec.ts --reporter=verbose
+pnpm vitest run tests/security/rls.spec.ts --reporter=verbose
+pnpm typecheck
+```
+
+- Reset applied the battle-data migration; `db lint --local` reported `No schema errors found`.
+- The atomic suite verifies the true late `23505` rollback, canonical 19-ID rejection, same-publication replacement, and cross-publication rotation. It removes the retired relation before moving the global `normal` Tera UUID, then proves an `owned_pokemon.tera_type_id` still points to that same UUID.
+- Owned-Pokemon transaction/security: 16/16 passed in 3.15s after the RED fixture correction. Coverage includes independent Tera/Gigantamax explicit-change behavior, correction preservation of a still-valid Tera choice, and audit JSON battle fields.
+- RLS: 6/6 passed in 5.36s. It now covers both option tables, anon denial, normal-user write denial, RPC EXECUTE revocation, ordered cleanup, active-publication restoration, and no fixture residue.
+- Generated types and `pnpm typecheck` passed.
+
+### Review changes
+
+- Form Tera and Gigantamax staged validation now uses staged `form_battle_profile.is_battle_only`, rather than prior table state.
+- The reconciler now tracks Tera and Gigantamax changes independently.
+- Replacement accepts only the canonical 19 identifiers, moves existing global Tera rows without changing their UUIDs, deletes dependent option rows before the move, and deactivates obsolete target-publication Tera rows.
+- Replaced redundant primary-key prefix indexes with option lookup indexes on `(publication_id, tera_type_id)` and `(publication_id, gigantamax_form_id)`.
+
+No unresolved concerns.

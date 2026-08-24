@@ -25,6 +25,7 @@ let alice: TestIdentity
 let bob: TestIdentity
 let speciesId: string
 let formId: string
+let gigantamaxFormId: string
 let pokemonId: string
 let anonymous: SupabaseClient
 let previousActivePublicationId: string | null = null
@@ -143,6 +144,26 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
       is_battle_only: false,
     })
     expect(formData.error).toBeNull()
+    gigantamaxFormId = randomUUID()
+    expect((await admin.from('reference_forms').insert({
+      id: gigantamaxFormId,
+      publication_id: referencePublicationId,
+      species_id: speciesId,
+      identifier: `eevee-gmax-${gigantamaxFormId}`,
+      name_ko: '이브이 거다이맥스',
+      is_default: false,
+      is_battle_only: true,
+    })).error).toBeNull()
+    expect((await admin.from('reference_form_tera_options').insert({
+      publication_id: referencePublicationId,
+      form_id: formId,
+      tera_type_id: activeTeraTypeId,
+    })).error).toBeNull()
+    expect((await admin.from('reference_form_gigantamax_options').insert({
+      publication_id: referencePublicationId,
+      source_form_id: formId,
+      gigantamax_form_id: gigantamaxFormId,
+    })).error).toBeNull()
 
     pokemonId = randomUUID()
     const inserted = await alice.client.from('owned_pokemon').insert({
@@ -159,17 +180,34 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
 
   afterAll(async () => {
     if (admin) {
-      await admin.from('reference_tera_types').delete().in('publication_id', [referencePublicationId, retiredReferencePublicationId])
-      await admin.from('data_publications').delete().in('id', [referencePublicationId, retiredReferencePublicationId])
-      if (previousActivePublicationId) {
-        await admin.from('data_publications').update({ status: 'active' }).eq('id', previousActivePublicationId)
+      const failures: string[] = []
+      const collect = (label: string, error: { message?: string } | null) => {
+        if (error) failures.push(`${label}: ${error.message ?? '알 수 없는 오류'}`)
       }
       for (const id of identities) {
         const deleted = await admin.auth.admin.deleteUser(id)
-        expect(deleted.error).toBeNull()
+        collect('사용자 삭제', deleted.error)
       }
-      if (formId) await admin.from('reference_forms').delete().eq('id', formId)
-      if (speciesId) await admin.from('reference_species').delete().eq('id', speciesId)
+      collect('테라 옵션 삭제', (await admin.from('reference_form_tera_options').delete().in('publication_id', [referencePublicationId, retiredReferencePublicationId])).error)
+      collect('거다이맥스 옵션 삭제', (await admin.from('reference_form_gigantamax_options').delete().in('publication_id', [referencePublicationId, retiredReferencePublicationId])).error)
+      collect('테라 타입 삭제', (await admin.from('reference_tera_types').delete().in('publication_id', [referencePublicationId, retiredReferencePublicationId])).error)
+      collect('모습 삭제', (await admin.from('reference_forms').delete().in('id', [formId, gigantamaxFormId])).error)
+      collect('종 삭제', (await admin.from('reference_species').delete().eq('id', speciesId)).error)
+      collect('시험 게시본 은퇴', (await admin.from('data_publications').update({ status: 'retired' }).eq('id', referencePublicationId)).error)
+      collect('시험 게시본 삭제', (await admin.from('data_publications').delete().in('id', [referencePublicationId, retiredReferencePublicationId])).error)
+      if (previousActivePublicationId) collect('기존 게시본 복구', (await admin.from('data_publications').update({ status: 'active' }).eq('id', previousActivePublicationId)).error)
+      const residue = await Promise.all([
+        admin.from('reference_form_tera_options').select('form_id', { count: 'exact', head: true }).in('publication_id', [referencePublicationId, retiredReferencePublicationId]),
+        admin.from('reference_form_gigantamax_options').select('source_form_id', { count: 'exact', head: true }).in('publication_id', [referencePublicationId, retiredReferencePublicationId]),
+        admin.from('reference_tera_types').select('id', { count: 'exact', head: true }).in('publication_id', [referencePublicationId, retiredReferencePublicationId]),
+        admin.from('reference_forms').select('id', { count: 'exact', head: true }).in('id', [formId, gigantamaxFormId]),
+        admin.from('data_publications').select('id', { count: 'exact', head: true }).in('id', [referencePublicationId, retiredReferencePublicationId]),
+      ])
+      residue.forEach((result, index) => {
+        collect(`잔존 조회 ${index + 1}`, result.error)
+        if ((result.count ?? 0) > 0) failures.push(`잔존 조회 ${index + 1}: ${result.count}개`)
+      })
+      if (failures.length) throw new Error(`RLS 픽스처 정리 실패\n${failures.join('\n')}`)
     }
   })
 
@@ -269,7 +307,7 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
     expect(inserted.error?.code).toBe('42501')
   })
 
-  it('전투 기준값은 활성 게시본만 인증 사용자에게 읽히며 anon과 일반 쓰기는 거부된다', async () => {
+  it('전투 기준값과 양쪽 옵션은 활성 게시본만 인증 사용자에게 읽히며 anon·일반 쓰기·교체 실행은 거부된다', async () => {
     const visible = await bob.client.from('reference_tera_types')
       .select('id,name_ko').in('id', [activeTeraTypeId, retiredTeraTypeId]).order('id')
     const anonymousRead = await anonymous.from('reference_tera_types').select('id').eq('id', activeTeraTypeId)
@@ -279,11 +317,24 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
       name_ko: '금지',
       sort_order: 99,
     })
+    const teraOptions = await bob.client.from('reference_form_tera_options').select('form_id,tera_type_id')
+    const gigantamaxOptions = await bob.client.from('reference_form_gigantamax_options').select('source_form_id,gigantamax_form_id')
+    const anonymousTeraOptions = await anonymous.from('reference_form_tera_options').select('form_id')
+    const anonymousGigantamaxOptions = await anonymous.from('reference_form_gigantamax_options').select('source_form_id')
+    const replacement = await bob.client.rpc('replace_pokemon_option_filter_reference_data', {
+      p_publication_id: referencePublicationId,
+      p_batch_id: randomUUID(),
+    })
 
     expect(visible.error).toBeNull()
     expect(visible.data).toEqual([{ id: activeTeraTypeId, name_ko: '노말' }])
     expect(anonymousRead.error).not.toBeNull()
     expect(userWrite.error?.code).toBe('42501')
+    expect(teraOptions.data).toEqual([{ form_id: formId, tera_type_id: activeTeraTypeId }])
+    expect(gigantamaxOptions.data).toEqual([{ source_form_id: formId, gigantamax_form_id: gigantamaxFormId }])
+    expect(anonymousTeraOptions.error).not.toBeNull()
+    expect(anonymousGigantamaxOptions.error).not.toBeNull()
+    expect(replacement.error?.code).toBe('42501')
   })
 
   it('보유 포켓몬이 있어도 계정을 삭제하고 감사 기록은 보존한다', async () => {
