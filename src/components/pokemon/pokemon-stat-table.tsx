@@ -28,7 +28,12 @@ export function PokemonStatTable({
   caption,
 }: PokemonStatTableProps) {
   return (
-    <div className="pokemon-stat-table">
+    <div
+      className="pokemon-stat-table"
+      role="region"
+      aria-label={caption}
+      tabIndex={0}
+    >
       <table>
         <caption>{caption}</caption>
         <thead>

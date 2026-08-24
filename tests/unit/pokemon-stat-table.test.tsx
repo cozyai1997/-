@@ -78,7 +78,10 @@ describe('PokemonStatTable', () => {
       />,
     )
 
-    const table = screen.getByRole('table', { name: '보유 포켓몬 능력치' })
+    const scrollRegion = screen.getByRole('region', { name: '보유 포켓몬 능력치' })
+    expect(scrollRegion).toHaveAttribute('tabindex', '0')
+
+    const table = within(scrollRegion).getByRole('table', { name: '보유 포켓몬 능력치' })
     expect(within(table).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual([
       '능력치',
       '종족값 Base Stats',
