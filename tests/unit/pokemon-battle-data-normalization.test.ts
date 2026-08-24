@@ -1,6 +1,10 @@
 import mechanicsSource from '../fixtures/reference-data/battle-mechanics/mechanics-source.json'
 import { describe, expect, it } from 'vitest'
-import type { ReferenceFormRow } from '@/features/localization/reference-data-validation'
+import {
+  validateReferenceData,
+  type ReferenceDataset,
+  type ReferenceFormRow,
+} from '@/features/localization/reference-data-validation'
 import {
   buildFormGigantamaxOptions,
   buildFormTeraOptions,
@@ -8,9 +12,20 @@ import {
   normalizeNatureRow,
   resolveInheritedBaseStats,
 } from '../../scripts/data/normalize-pokemon-battle-data'
-import { importReferenceData } from '../../scripts/data/import-reference-data'
+import {
+  importReferenceData,
+  localizeEvolutionConditionForPublication,
+} from '../../scripts/data/import-reference-data'
 
 const forms = mechanicsSource.forms as ReferenceFormRow[]
+const productionSource = 'C:\\Users\\PARKSUNGSIK\\OneDrive\\문서\\Desktop\\Cobbleverse_Pokemon_Manager_Package_v1.3_TABLE_FIX'
+const hangulPattern = /[ㄱ-ㅎㅏ-ㅣ가-힣]/u
+let cachedProductionDataset: ReferenceDataset | undefined
+
+function productionDataset() {
+  cachedProductionDataset ??= importReferenceData(productionSource)
+  return cachedProductionDataset
+}
 
 describe('Cobbleverse 전투 데이터 정규화', () => {
   it('여섯 종족값이 모두 0인 폼은 두 단계 부모까지 상속하고 aspects를 정규화한다', () => {
@@ -101,7 +116,7 @@ describe('Cobbleverse 전투 데이터 정규화', () => {
   })
 
   it('Cobbleverse 전체 원본을 1,498개 전투 폼과 정확한 테라·거다이맥스 관계로 만든다', () => {
-    const result = importReferenceData('C:\\Users\\PARKSUNGSIK\\OneDrive\\문서\\Desktop\\Cobbleverse_Pokemon_Manager_Package_v1.3_TABLE_FIX')
+    const result = productionDataset()
 
     expect(result.forms).toHaveLength(1_498)
     expect(result.forms.filter((form) => !form.isBattleOnly)).toHaveLength(1_334)
@@ -117,5 +132,91 @@ describe('Cobbleverse 전투 데이터 정규화', () => {
       { sourceFormId: 'alcremie-normal', gigantamaxFormId: 'alcremie-gmax' },
       { sourceFormId: 'alcremie-saltedcream', gigantamaxFormId: 'alcremie-gmax' },
     ]))
+  })
+
+  it('실제 원본의 폼은 패키지 한국어 키를 우선하고 영문 토큰을 표시값으로 남기지 않는다', () => {
+    const result = productionDataset()
+
+    expect(result.forms.find((form) => form.id === 'venusaur-gmax')?.nameKo)
+      .toBe('거다이맥스 이상해꽃')
+    expect(result.forms.find((form) => form.id === 'lucario-cafecostume')?.nameKo)
+      .toBe('카페 루카리오')
+    expect(result.forms.find((form) => form.id === 'unown-form-26')?.nameKo)
+      .toBe('안농 · 느낌표의 모습')
+    expect(result.forms.find((form) => form.id === 'vulpix-form2')?.nameKo)
+      .toBe('식스테일 · 원본에서 세부 정보가 제공되지 않은 별도 모습')
+    expect(result.forms.every((form) => hangulPattern.test(form.nameKo))).toBe(true)
+    expect(result.forms.every((form) => !/한국어 이름 미제공 모습 \d+/u.test(form.nameKo))).toBe(true)
+  })
+
+  it('한국어가 없는 Minecraft 도구도 영문 이름·설명을 공개 후보에 남기지 않는다', () => {
+    const result = productionDataset()
+
+    expect(result.items.find((item) => item.id === 'acacia_log')).toMatchObject({
+      nameKo: '아카시아나무 원목',
+    })
+    expect(result.items.find((item) => item.id === 'melon_seeds')).toMatchObject({
+      nameKo: '수박씨',
+    })
+    expect(result.items.find((item) => item.id === 'raw_cod')).toMatchObject({
+      nameKo: '익히지 않은 대구',
+    })
+    expect(result.items.find((item) => item.id === 'eye_of_ender')).toMatchObject({
+      nameKo: '엔더의 눈',
+    })
+    expect(result.items.find((item) => item.id === 'slimeball')).toMatchObject({
+      nameKo: '슬라임볼',
+    })
+    expect(result.items.every((item) => (
+      hangulPattern.test(item.nameKo) && hangulPattern.test(item.descriptionKo ?? '')
+    ))).toBe(true)
+    expect(result.items.every((item) => !/한국어 이름 미제공 도구 \d+/u.test(item.nameKo))).toBe(true)
+  })
+
+  it('메가 대상을 같은 종의 폼으로 정규화하고 모든 진화 조건을 한국어로 제공한다', () => {
+    const result = productionDataset()
+    const report = validateReferenceData(result)
+
+    expect(result.evolutions.find((evolution) => evolution.id === 'gengar>megagengar:71'))
+      .toMatchObject({
+        fromSpeciesId: 'gengar',
+        toSpeciesId: 'gengar',
+        toFormId: 'gengar-mega',
+        conditionKo: '키스톤 사용',
+      })
+    expect(result.evolutions.every((evolution) => hangulPattern.test(evolution.conditionKo)))
+      .toBe(true)
+    expect(result.evolutions.find((evolution) => evolution.id === 'milotic>megamilotic:233'))
+      .toMatchObject({
+        toSpeciesId: 'milotic',
+        toFormId: null,
+        conditionKo: '키스톤 사용; 원본에 대상 메가 폼이 없음',
+      })
+    expect(report.brokenReferences).toEqual([])
+  })
+
+  it('진화 조건은 레벨·도구·기술·시간·바이옴·능력치·누적 행동 의미를 보존한다', () => {
+    const result = productionDataset()
+    const conditions = result.evolutions.map((evolution) => evolution.conditionKo)
+
+    expect(conditions).toContain('레벨 50 이상; 비가 오는 동안')
+    expect(conditions).toContain('레벨 20 이상; 공격과 방어가 같음')
+    expect(conditions).toContain('레벨 30 이상; 뒤집어엎기 기술을 알고 있음')
+    expect(conditions).toContain('레벨업; 피해 49 이상 받기; 모래 바이옴')
+    expect(conditions).toContain('급소 3회 적중')
+    expect(conditions).toContain('반동 피해 누적 294 이상')
+    expect(conditions).toContain('분노의주먹 20회 사용')
+    expect(conditions).toContain('모으령의 코인 999개 보유')
+    expect(conditions).toContain('피트블록 사용; 보름달; 밤')
+    expect(conditions).toContain('천둥의돌 사용; 알로라 피카츄 진화 바이옴이 아님')
+    expect(conditions.some((condition) => condition.includes('성격이 명랑'))).toBe(true)
+    expect(conditions.some((condition) => condition.includes('왕의징표석을 지닌 절각참 3마리 처치')))
+      .toBe(true)
+    expect(conditions.every((condition) => !condition.includes('추가 조건 충족'))).toBe(true)
+    expect(() => localizeEvolutionConditionForPublication(
+      'Unknown source atom',
+      'level_up',
+      {},
+    )).toThrow('evolutions:unlocalized-condition:Unknown source atom')
   })
 })

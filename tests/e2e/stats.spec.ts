@@ -40,8 +40,11 @@ test('한국어 화면에서 IV·EV·성격을 반영하고 잘못된 EV를 설�
   await page.getByLabel('하락 능력치').selectOption('special_attack')
   await page.getByRole('button', { name: '능력치 계산하기' }).click()
 
+  await expect(page.getByRole('row', { name: /HP 70 31 0 145/ })).toBeVisible()
   await expect(page.getByRole('row', { name: /공격 110 31 252 162/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /방어 70 31 0 90/ })).toBeVisible()
   await expect(page.getByRole('row', { name: /특수공격 115 31 0 121/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /특수방어 70 31 4 91/ })).toBeVisible()
   await expect(page.getByRole('row', { name: /스피드 90 31 252 156/ })).toBeVisible()
 
   await page.getByLabel('HP EV').fill('7')

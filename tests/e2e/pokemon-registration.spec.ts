@@ -4,6 +4,14 @@ import { expect, test } from '@playwright/test'
 const suffix = Date.now().toString(36)
 const email = `pokemon-${suffix}@example.com`
 const password = 'Local-test-password-2026!'
+const teraTypeNamesKo = [
+  '노말', '격투', '비행', '독', '땅', '바위', '벌레', '고스트', '강철', '불꽃',
+  '물', '풀', '전기', '에스퍼', '얼음', '드래곤', '악', '페어리', '스텔라',
+] as const
+const teraTypeIdentifiers = [
+  'normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel', 'fire',
+  'water', 'grass', 'electric', 'psychic', 'ice', 'dragon', 'dark', 'fairy', 'stellar',
+] as const
 let admin: SupabaseClient
 let userId = ''
 let nationalDexNumber = 0
@@ -14,6 +22,7 @@ let typeId = ''
 let speciesId = ''
 let formId = ''
 let alternateFormId = ''
+let gigantamaxFormId = ''
 let targetSpeciesId = ''
 let targetFormId = ''
 let evolutionRuleId = ''
@@ -24,6 +33,9 @@ let itemId = ''
 let allowedMoveId = ''
 let secondAllowedMoveId = ''
 let otherSpeciesMoveId = ''
+let waterTeraTypeId = ''
+let stellarTeraTypeId = ''
+let teraTypeIds: string[] = []
 
 test.describe.serial('보유 포켓몬 등록', () => {
   test.beforeAll(async () => {
@@ -84,6 +96,29 @@ test.describe.serial('보유 포켓몬 등록', () => {
     if (type.error) throw type.error
     typeId = type.data.id
 
+    const teraTypes = await admin
+      .from('reference_tera_types')
+      .insert(teraTypeIdentifiers.map((identifier, sortOrder) => ({
+        publication_id: publicationId,
+        identifier: `${identifier}-${suffix}`,
+        name_ko: teraTypeNamesKo[sortOrder],
+        reference_type_id: identifier === 'water' ? typeId : null,
+        sort_order: sortOrder,
+      })))
+      .select('id,identifier')
+    if (teraTypes.error) throw teraTypes.error
+    if (teraTypes.data.length !== 19) throw new Error('E2E 테라타입 19개 픽스처 생성 실패')
+    teraTypeIds = teraTypes.data.map((teraType) => teraType.id)
+    waterTeraTypeId = teraTypes.data.find(
+      (teraType) => teraType.identifier === `water-${suffix}`,
+    )?.id ?? ''
+    stellarTeraTypeId = teraTypes.data.find(
+      (teraType) => teraType.identifier === `stellar-${suffix}`,
+    )?.id ?? ''
+    if (!waterTeraTypeId || !stellarTeraTypeId) {
+      throw new Error('E2E 물·스텔라 테라타입 픽스처 생성 실패')
+    }
+
     const occupiedDexNumbers = await admin
       .from('reference_species')
       .select('national_dex_number')
@@ -120,6 +155,13 @@ test.describe.serial('보유 포켓몬 등록', () => {
         species_id: speciesId,
         name_ko: '기본 모습',
         is_default: true,
+        base_hp: 130,
+        base_attack: 65,
+        base_defense: 60,
+        base_special_attack: 110,
+        base_special_defense: 95,
+        base_speed: 65,
+        is_battle_only: false,
       })
       .select('id')
       .single()
@@ -135,11 +177,56 @@ test.describe.serial('보유 포켓몬 등록', () => {
         base_form_id: formId,
         name_ko: '물결 모습',
         is_default: false,
+        base_hp: 130,
+        base_attack: 65,
+        base_defense: 60,
+        base_special_attack: 110,
+        base_special_defense: 95,
+        base_speed: 65,
+        is_battle_only: false,
       })
       .select('id')
       .single()
     if (alternateForm.error) throw alternateForm.error
     alternateFormId = alternateForm.data.id
+
+    const gigantamaxForm = await admin
+      .from('reference_forms')
+      .insert({
+        publication_id: publicationId,
+        identifier: `vaporeon-gmax-${suffix}`,
+        species_id: speciesId,
+        base_form_id: formId,
+        name_ko: '거다이맥스 모습',
+        is_default: false,
+        base_hp: 130,
+        base_attack: 65,
+        base_defense: 60,
+        base_special_attack: 110,
+        base_special_defense: 95,
+        base_speed: 65,
+        is_battle_only: true,
+      })
+      .select('id')
+      .single()
+    if (gigantamaxForm.error) throw gigantamaxForm.error
+    gigantamaxFormId = gigantamaxForm.data.id
+
+    const battleOptions = await Promise.all([
+      admin.from('reference_form_tera_options').insert([
+        { publication_id: publicationId, form_id: formId, tera_type_id: waterTeraTypeId },
+        { publication_id: publicationId, form_id: formId, tera_type_id: stellarTeraTypeId },
+        { publication_id: publicationId, form_id: alternateFormId, tera_type_id: stellarTeraTypeId },
+      ]),
+      admin.from('reference_form_gigantamax_options').insert({
+        publication_id: publicationId,
+        source_form_id: formId,
+        gigantamax_form_id: gigantamaxFormId,
+      }),
+    ])
+    for (const result of battleOptions) {
+      if (result.error) throw result.error
+    }
 
     const targetSpecies = await admin
       .from('reference_species')
@@ -163,6 +250,13 @@ test.describe.serial('보유 포켓몬 등록', () => {
         species_id: targetSpeciesId,
         name_ko: '기본 모습',
         is_default: true,
+        base_hp: 65,
+        base_attack: 65,
+        base_defense: 60,
+        base_special_attack: 110,
+        base_special_defense: 95,
+        base_speed: 130,
+        is_battle_only: false,
       })
       .select('id')
       .single()
@@ -188,6 +282,8 @@ test.describe.serial('보유 포켓몬 등록', () => {
         publication_id: publicationId,
         identifier: `jolly-${suffix}`,
         name_ko: '명랑',
+        increased_stat: 'speed',
+        decreased_stat: 'special_attack',
       })
       .select('id')
       .single()
@@ -261,7 +357,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
           damage_class: 'special',
           power: 90,
           accuracy: 100,
-          pp: 10,
+          pp: null,
         },
         {
           publication_id: publicationId,
@@ -343,7 +439,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
   test.afterAll(async () => {
     if (!admin) return
     const moveIds = [allowedMoveId, secondAllowedMoveId, otherSpeciesMoveId].filter(Boolean)
-    const formIds = [alternateFormId, targetFormId, formId].filter(Boolean)
+    const formIds = [gigantamaxFormId, alternateFormId, targetFormId, formId].filter(Boolean)
     const speciesIds = [targetSpeciesId, speciesId].filter(Boolean)
     const abilityIds = [disallowedAbilityId, abilityId].filter(Boolean)
     const cleanupSteps: CleanupStep[] = [
@@ -362,6 +458,12 @@ test.describe.serial('보유 포켓몬 등록', () => {
       cleanupStep('진화 규칙 삭제', Boolean(evolutionRuleId), () => (
         admin.from('reference_evolution_rules').delete().eq('id', evolutionRuleId)
       )),
+      cleanupStep('거다이맥스 관계 삭제', Boolean(publicationId), () => (
+        admin.from('reference_form_gigantamax_options').delete().eq('publication_id', publicationId)
+      )),
+      cleanupStep('폼 테라 관계 삭제', Boolean(publicationId), () => (
+        admin.from('reference_form_tera_options').delete().eq('publication_id', publicationId)
+      )),
       cleanupStep('기술 습득 관계 삭제', Boolean(publicationId), () => (
         admin.from('reference_move_learnsets').delete().eq('publication_id', publicationId)
       )),
@@ -379,6 +481,12 @@ test.describe.serial('보유 포켓몬 등록', () => {
       )),
       cleanupStep('성격 삭제', Boolean(natureId), () => (
         admin.from('reference_natures').delete().eq('id', natureId)
+      )),
+      cleanupStep('테라타입 삭제', teraTypeIds.length > 0, () => (
+        admin.from('reference_tera_types').delete().in('id', teraTypeIds)
+      )),
+      cleanupStep('거다이맥스 폼 삭제', Boolean(gigantamaxFormId), () => (
+        admin.from('reference_forms').delete().eq('id', gigantamaxFormId)
       )),
       cleanupStep('대체 폼 삭제', Boolean(alternateFormId), () => (
         admin.from('reference_forms').delete().eq('id', alternateFormId)
@@ -425,6 +533,20 @@ test.describe.serial('보유 포켓몬 등록', () => {
           .from('reference_evolution_rules')
           .select('id', { count: 'exact', head: true })
           .eq('id', evolutionRuleId)
+        return { error: result.error, residue: result.count ?? 0 }
+      }),
+      residueStep('거다이맥스 관계 잔존', Boolean(publicationId), async () => {
+        const result = await admin
+          .from('reference_form_gigantamax_options')
+          .select('source_form_id', { count: 'exact', head: true })
+          .eq('publication_id', publicationId)
+        return { error: result.error, residue: result.count ?? 0 }
+      }),
+      residueStep('폼 테라 관계 잔존', Boolean(publicationId), async () => {
+        const result = await admin
+          .from('reference_form_tera_options')
+          .select('form_id', { count: 'exact', head: true })
+          .eq('publication_id', publicationId)
         return { error: result.error, residue: result.count ?? 0 }
       }),
       residueStep('기술 습득 관계 잔존', Boolean(publicationId), async () => {
@@ -483,6 +605,13 @@ test.describe.serial('보유 포켓몬 등록', () => {
           .eq('id', natureId)
         return { error: result.error, residue: result.count ?? 0 }
       }),
+      residueStep('테라타입 잔존', teraTypeIds.length > 0, async () => {
+        const result = await admin
+          .from('reference_tera_types')
+          .select('id', { count: 'exact', head: true })
+          .in('id', teraTypeIds)
+        return { error: result.error, residue: result.count ?? 0 }
+      }),
       residueStep('타입 잔존', Boolean(typeId), async () => {
         const result = await admin
           .from('reference_types')
@@ -523,10 +652,10 @@ test.describe.serial('보유 포켓몬 등록', () => {
     await expect(page.getByText(`도감번호 #${formatDex(nationalDexNumber)}`)).toHaveCount(2)
     await expect(page.getByText('파도')).toBeVisible()
     await expect(page.getByText('물결')).toBeVisible()
+    await expect(page.getByText('테라타입: 물')).toHaveCount(2)
+    await expect(page.getByText('거다이맥스 가능')).toHaveCount(2)
 
-    const visibleText = await page.locator('body').innerText()
-    expect(visibleText).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i)
-    expect(page.url()).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i)
+    await expectNoInternalIdentifiers(page)
 
     const savedPokemon = await admin
       .from('owned_pokemon')
@@ -572,12 +701,38 @@ test.describe.serial('보유 포켓몬 등록', () => {
     await expect(page.getByText('천둥의돌을 사용한다')).toBeVisible()
     await expect(page.getByRole('option', { name: '저수 · 숨겨진 특성' })).toBeAttached()
     await expect(page.getByRole('option', { name: '촉촉바디' })).toHaveCount(0)
+    await expect(page.getByLabel('테라타입').locator('option:checked')).toHaveText('물')
+    await expect(page.getByRole('checkbox', { name: '거다이맥스 인자 보유' })).toBeChecked()
+
+    const detailStats = page.getByRole('table', { name: '보유 포켓몬 능력치' })
+    await expect(detailStats.getByRole('row', { name: /HP 130 0 31 0 244/ })).toBeVisible()
+    await expect(detailStats.getByRole('row', { name: /공격 65 0 31 252 139/ })).toBeVisible()
+    await expect(detailStats.getByRole('row', { name: /방어 60 0 31 0 95/ })).toBeVisible()
+    await expect(detailStats.getByRole('row', { name: /특공 110 0 31 0 139/ })).toBeVisible()
+    await expect(detailStats.getByRole('row', { name: /특방 95 0 31 4 138/ })).toBeVisible()
+    await expect(detailStats.getByRole('row', { name: /스피드 65 0 31 252 152/ })).toBeVisible()
+    await expect(page.getByRole('article', { name: '파도타기' }).filter({ hasText: '현재 기술 1' }))
+      .toContainText('기본 PP: 15')
+    await expect(page.getByRole('article', { name: '냉동빔' }).filter({ hasText: '현재 기술 2' }))
+      .toContainText('기본 PP: 확인 불가')
+    await expectNoInternalIdentifiers(page)
+
+    await page.getByLabel('테라타입').selectOption({ label: '스텔라' })
+    await page.getByRole('checkbox', { name: '거다이맥스 인자 보유' }).uncheck()
 
     await page.getByLabel('빠른 수정 레벨').fill('61')
     await page.getByLabel('메모').fill('특수공격 중심 육성')
     await page.getByRole('button', { name: '빠른 수정 저장' }).click()
     await expect(page.getByText('Lv. 61')).toBeVisible()
     await expect(page.getByRole('paragraph').filter({ hasText: '특수공격 중심 육성' })).toBeVisible()
+    await expect(page.getByLabel('저장된 전투 설정')).toContainText('테라타입: 스텔라')
+    await expect(page.getByLabel('저장된 전투 설정')).toContainText('거다이맥스 불가능')
+
+    await page.getByLabel('테라타입').selectOption({ label: '물' })
+    await page.getByRole('checkbox', { name: '거다이맥스 인자 보유' }).check()
+    await page.getByRole('button', { name: '빠른 수정 저장' }).click()
+    await expect(page.getByLabel('저장된 전투 설정')).toContainText('테라타입: 물')
+    await expect(page.getByLabel('저장된 전투 설정')).toContainText('거다이맥스 가능')
 
     await page.getByRole('button', { name: '보호 정보 정정 열기' }).click()
     await page.getByLabel('정정 모습').selectOption({ label: '물결 모습' })
@@ -588,7 +743,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
 
     const formCorrected = await admin
       .from('owned_pokemon')
-      .select('id,form_id,ability_id')
+      .select('id,form_id,ability_id,tera_type_id,has_gigantamax_factor')
       .eq('user_id', userId)
       .eq('nickname', '파도')
       .single()
@@ -608,14 +763,23 @@ test.describe.serial('보유 포켓몬 등록', () => {
       .single()
     if (formAudit.error) throw formAudit.error
 
-    expect(formCorrected.data).toMatchObject({ form_id: alternateFormId, ability_id: null })
+    expect(formCorrected.data).toMatchObject({
+      form_id: alternateFormId,
+      ability_id: null,
+      tera_type_id: null,
+      has_gigantamax_factor: false,
+    })
     expect(retainedMoves.data).toHaveLength(4)
     expect(formAudit.data).toMatchObject({
       reason_ko: '잘못 입력한 모습 정보를 정정함',
       before_data: {
+        tera_type_id: waterTeraTypeId,
+        has_gigantamax_factor: true,
         dependent_state: { ability_id: abilityId, moves: expect.any(Array) },
       },
       after_data: {
+        tera_type_id: null,
+        has_gigantamax_factor: false,
         dependent_state: { ability_id: null, moves: expect.any(Array) },
       },
     })
@@ -693,6 +857,9 @@ async function registerPokemon(
   await page.getByLabel('포켓몬 종').selectOption({
     label: `샤미드 · 도감번호 #${formatDex(nationalDexNumber)}`,
   })
+  await expect(page.getByRole('option', { name: '기본 모습' })).toBeAttached()
+  await expect(page.getByRole('option', { name: '물결 모습' })).toBeAttached()
+  await expect(page.getByRole('option', { name: '거다이맥스 모습' })).toHaveCount(0)
   await page.getByRole('button', { name: '다음' }).click()
 
   await page.getByLabel('별명').fill(nickname)
@@ -707,6 +874,13 @@ async function registerPokemon(
   await expect(page.getByRole('option', { name: '저수 · 숨겨진 특성' })).toBeAttached()
   await expect(page.getByRole('option', { name: '촉촉바디' })).toHaveCount(0)
   await page.getByLabel('특성', { exact: true }).selectOption({ label: '저수 · 숨겨진 특성' })
+  await expect(page.getByLabel('테라타입').getByRole('option')).toHaveCount(3)
+  await expect(page.getByRole('option', { name: '물', exact: true })).toBeAttached()
+  await expect(page.getByRole('option', { name: '스텔라', exact: true })).toBeAttached()
+  await expect(page.getByRole('option', { name: '불꽃', exact: true })).toHaveCount(0)
+  await page.getByLabel('테라타입').selectOption({ label: '물' })
+  await expect(page.getByRole('checkbox', { name: '거다이맥스 인자 보유' })).toBeEnabled()
+  await page.getByRole('checkbox', { name: '거다이맥스 인자 보유' }).check()
 
   if (verifyReconciliation) {
     await page.getByRole('button', { name: '이전' }).click()
@@ -723,13 +897,35 @@ async function registerPokemon(
     await page.getByRole('button', { name: '다음' }).click()
     await page.getByRole('button', { name: '다음' }).click()
     await page.getByLabel('특성', { exact: true }).selectOption({ label: '저수 · 숨겨진 특성' })
+    await page.getByLabel('테라타입').selectOption({ label: '물' })
+    await page.getByRole('checkbox', { name: '거다이맥스 인자 보유' }).check()
   }
   await page.getByRole('button', { name: '다음' }).click()
 
-  for (let step = 4; step <= 5; step += 1) {
-    await expect(page.getByText(`${step} / 7단계`)).toBeVisible()
-    await page.getByRole('button', { name: '다음' }).click()
+  await expect(page.getByText('4 / 7단계')).toBeVisible()
+  for (const statName of ['HP', '공격', '방어', '특수공격', '특수방어', '스피드']) {
+    await page.getByLabel(`실전 ${statName} IV`).fill('31')
   }
+  await expect(page.getByLabel('HP 종족값')).toHaveValue('130')
+  await expect(page.getByLabel('공격 종족값', { exact: true })).toHaveValue('65')
+  await expect(page.getByLabel('방어 종족값', { exact: true })).toHaveValue('60')
+  await expect(page.getByLabel('특수공격 종족값', { exact: true })).toHaveValue('110')
+  await expect(page.getByLabel('특수방어 종족값', { exact: true })).toHaveValue('95')
+  await expect(page.getByLabel('스피드 종족값', { exact: true })).toHaveValue('65')
+  await page.getByRole('button', { name: '다음' }).click()
+
+  await expect(page.getByText('5 / 7단계')).toBeVisible()
+  await page.getByLabel('공격 EV', { exact: true }).fill('252')
+  await page.getByLabel('특수방어 EV', { exact: true }).fill('4')
+  await page.getByLabel('스피드 EV', { exact: true }).fill('252')
+  const liveStats = page.getByRole('table', { name: '등록 중 능력치' })
+  await expect(liveStats.getByRole('row', { name: /HP 130 0 31 0 244/ })).toBeVisible()
+  await expect(liveStats.getByRole('row', { name: /공격 65 0 31 252 139/ })).toBeVisible()
+  await expect(liveStats.getByRole('row', { name: /방어 60 0 31 0 95/ })).toBeVisible()
+  await expect(liveStats.getByRole('row', { name: /특공 110 0 31 0 139/ })).toBeVisible()
+  await expect(liveStats.getByRole('row', { name: /특방 95 0 31 4 138/ })).toBeVisible()
+  await expect(liveStats.getByRole('row', { name: /스피드 65 0 31 252 152/ })).toBeVisible()
+  await page.getByRole('button', { name: '다음' }).click()
 
   await expect(page.getByText('6 / 7단계')).toBeVisible()
   await expect(page.getByRole('option', { name: /파도타기/u }).first()).toBeAttached()
@@ -745,6 +941,9 @@ async function registerPokemon(
   await page.getByLabel('목표 기술 2').selectOption(secondAllowedMoveId)
   await page.getByLabel('목표 습득 방법 1').selectOption({ label: '기술머신 · 기술머신 123으로 습득' })
   await page.getByLabel('지닌 도구').selectOption({ label: '신비의물방울' })
+  const currentMoves = page.getByRole('group', { name: '현재 기술' })
+  await expect(currentMoves.getByRole('article', { name: '파도타기' })).toContainText('기본 PP: 15')
+  await expect(currentMoves.getByRole('article', { name: '냉동빔' })).toContainText('기본 PP: 확인 불가')
 
   await page.reload()
   await expect(page.getByLabel('현재 기술 1')).toHaveValue(allowedMoveId)
@@ -767,6 +966,8 @@ async function registerPokemon(
     await page.getByRole('button', { name: '다음' }).click()
     await expect(page.getByLabel('특성', { exact: true })).toHaveValue('')
     await page.getByLabel('특성', { exact: true }).selectOption({ label: '저수 · 숨겨진 특성' })
+    await page.getByLabel('테라타입').selectOption({ label: '물' })
+    await page.getByRole('checkbox', { name: '거다이맥스 인자 보유' }).check()
     await page.getByRole('button', { name: '다음' }).click()
     await page.getByRole('button', { name: '다음' }).click()
     await page.getByRole('button', { name: '다음' }).click()
@@ -783,12 +984,38 @@ async function registerPokemon(
   await page.getByRole('button', { name: '다음' }).click()
 
   await expect(page.getByText('7 / 7단계')).toBeVisible()
+  await expect(page.getByText('테라타입: 물')).toBeVisible()
+  await expect(page.getByText('거다이맥스 가능')).toBeVisible()
+  const finalStats = page.getByRole('table', { name: '최종 능력치' })
+  await expect(finalStats.getByRole('row', { name: /HP 130 0 31 0 244/ })).toBeVisible()
+  await expect(finalStats.getByRole('row', { name: /스피드 65 0 31 252 152/ })).toBeVisible()
+  await expect(page.getByRole('article', { name: '파도타기' }).filter({ hasText: '현재 기술 1' }))
+    .toContainText('기본 PP: 15')
+  await expect(page.getByRole('article', { name: '냉동빔' }).filter({ hasText: '현재 기술 2' }))
+    .toContainText('기본 PP: 확인 불가')
+  await expectNoInternalIdentifiers(page)
   await page.getByRole('button', { name: '등록 완료' }).click()
   await expect(page).toHaveURL(/\/my-pokemon$/)
 }
 
 function formatDex(value: number) {
   return String(value).padStart(4, '0')
+}
+
+async function expectNoInternalIdentifiers(page: import('@playwright/test').Page) {
+  const visibleText = await page.locator('body').innerText()
+  expect(visibleText).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i)
+  expect(page.url()).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i)
+  for (const identifier of [
+    `vaporeon-${suffix}`,
+    `vaporeon-default-${suffix}`,
+    `vaporeon-wave-${suffix}`,
+    `vaporeon-gmax-${suffix}`,
+    `jolly-${suffix}`,
+    ...teraTypeIdentifiers.map((identifier) => `${identifier}-${suffix}`),
+  ]) {
+    expect(visibleText).not.toContain(identifier)
+  }
 }
 
 type CleanupStepResult = { error: unknown; residue?: number | null }
