@@ -10,6 +10,10 @@ import {
   collectBattleDataIssues,
   type ReferenceDataset,
 } from '../../src/features/localization/reference-data-validation'
+import {
+  authenticateReferenceDataset,
+  authenticateReferenceDatasetAgainstTrustedDataset,
+} from './authenticate-reference-data'
 
 const batchSize = 750
 const hangulPattern = /[ㄱ-ㅎㅏ-ㅣ가-힣]/u
@@ -320,7 +324,7 @@ export function assertKoreanOptionDisplayValues(
   }
 }
 
-export async function publishPokemonOptionFilterReferenceData(
+export async function stagePokemonOptionFilterReferenceData(
   dataset: ReferenceDataset,
   client: SupabaseClient,
 ): Promise<{
@@ -482,10 +486,31 @@ export async function publishPokemonOptionFilterReferenceData(
   }
 }
 
+export async function publishPokemonOptionFilterReferenceDataAgainstTrustedDataset(
+  dataset: ReferenceDataset,
+  trustedDataset: ReferenceDataset,
+  client: SupabaseClient,
+) {
+  authenticateReferenceDatasetAgainstTrustedDataset(dataset, trustedDataset)
+  return stagePokemonOptionFilterReferenceData(dataset, client)
+}
+
+export async function publishPokemonOptionFilterReferenceData(
+  dataset: ReferenceDataset,
+  trustedSourceRoot: string,
+  client: SupabaseClient,
+) {
+  authenticateReferenceDataset(dataset, trustedSourceRoot)
+  return stagePokemonOptionFilterReferenceData(dataset, client)
+}
+
 async function main(): Promise<void> {
   const input = argument('--input')
-  if (!input) {
-    throw new Error('사용법: tsx scripts/data/publish-pokemon-option-filter-reference-data.ts --input <후보 JSON>')
+  const source = argument('--source')
+  if (!input || !source) {
+    throw new Error(
+      '사용법: tsx scripts/data/publish-pokemon-option-filter-reference-data.ts --input <후보 JSON> --source <신뢰 원본 폴더>',
+    )
   }
   const dataset = JSON.parse(readFileSync(resolve(input), 'utf8')) as ReferenceDataset
   const client = createClient(
@@ -493,7 +518,7 @@ async function main(): Promise<void> {
     requireEnvironment('SUPABASE_SERVICE_ROLE_KEY'),
     { auth: { autoRefreshToken: false, persistSession: false } },
   )
-  const counts = await publishPokemonOptionFilterReferenceData(dataset, client)
+  const counts = await publishPokemonOptionFilterReferenceData(dataset, source, client)
   process.stdout.write(`${JSON.stringify(counts)}\n`)
 }
 

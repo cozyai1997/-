@@ -4,7 +4,8 @@ import {
   assertKoreanOptionDisplayValues,
   assertOptionFilterPublicationCounts,
   prepareBattlePublicationRows,
-  publishPokemonOptionFilterReferenceData,
+  publishPokemonOptionFilterReferenceDataAgainstTrustedDataset,
+  stagePokemonOptionFilterReferenceData,
   stageThenReplacePublicationRows,
 } from '../../scripts/data/publish-pokemon-option-filter-reference-data'
 import type { ReferenceDataset } from '@/features/localization/reference-data-validation'
@@ -113,7 +114,7 @@ describe('포켓몬 선택 필터 게시', () => {
     const candidate = structuredClone(validCandidate)
     candidate.forms[0].baseStats.hp = 0
 
-    await expect(publishPokemonOptionFilterReferenceData(candidate, client as never))
+    await expect(stagePokemonOptionFilterReferenceData(candidate, client as never))
       .rejects.toThrow('forms:form-0:baseStats')
     expect(client.from).not.toHaveBeenCalled()
   })
@@ -123,7 +124,7 @@ describe('포켓몬 선택 필터 게시', () => {
     const candidate = structuredClone(validCandidate)
     candidate.learnsets[1] = { ...candidate.learnsets[0] }
 
-    await expect(publishPokemonOptionFilterReferenceData(candidate, client as never))
+    await expect(stagePokemonOptionFilterReferenceData(candidate, client as never))
       .rejects.toThrow('learnsets:species-a::move-0:level:1:레벨 1에 습득 0:duplicate')
     expect(client.from).not.toHaveBeenCalled()
   })
@@ -140,7 +141,7 @@ describe('포켓몬 선택 필터 게시', () => {
     const candidate = structuredClone(validCandidate)
     tamper(candidate)
 
-    await expect(publishPokemonOptionFilterReferenceData(candidate, client as never))
+    await expect(stagePokemonOptionFilterReferenceData(candidate, client as never))
       .rejects.toThrow(token)
     expect(client.from).not.toHaveBeenCalled()
   })
@@ -157,8 +158,22 @@ describe('포켓몬 선택 필터 게시', () => {
       key: 'species-a>megaspecies-a:0', target: 'forms:species-a-mega',
     }]
 
-    await expect(publishPokemonOptionFilterReferenceData(candidate, client as never))
+    await expect(stagePokemonOptionFilterReferenceData(candidate, client as never))
       .rejects.toThrow('sourceDiagnostics:species-a>megaspecies-a:0:unreviewed')
+    expect(client.from).not.toHaveBeenCalled()
+  })
+
+  it('trusted source와 다른 유효 후보는 인증 단계에서 첫 DB 호출 전에 거부한다', async () => {
+    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
+    const trustedDataset = createProductionReferenceCandidate()
+    const candidate = structuredClone(trustedDataset)
+    candidate.items[0].descriptionKo = '검증을 통과하지만 신뢰 원본과 다른 설명이다.'
+
+    await expect(publishPokemonOptionFilterReferenceDataAgainstTrustedDataset(
+      candidate,
+      trustedDataset,
+      client as never,
+    )).rejects.toThrow('candidate-digest')
     expect(client.from).not.toHaveBeenCalled()
   })
 
@@ -170,7 +185,7 @@ describe('포켓몬 선택 필터 게시', () => {
       types: [], species: [], forms: [], abilities: [], moves: [], learnsets: [], items: [], evolutions: [], formAbilities: [], natures: [], typeMatchups: [],
     } as unknown as ReferenceDataset
 
-    await expect(publishPokemonOptionFilterReferenceData(candidate, client as never))
+    await expect(stagePokemonOptionFilterReferenceData(candidate, client as never))
       .rejects.toThrow('moves:actual=0:reported=825:expected=826')
     expect(client.from).not.toHaveBeenCalled()
   })
@@ -305,7 +320,7 @@ describe('포켓몬 선택 필터 게시', () => {
   ) => {
     const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
 
-    await expect(publishPokemonOptionFilterReferenceData(
+    await expect(stagePokemonOptionFilterReferenceData(
       modify(validCandidate),
       client as never,
     )).rejects.toThrow(expected)
@@ -329,7 +344,7 @@ describe('포켓몬 선택 필터 게시', () => {
       }),
     }
 
-    await expect(publishPokemonOptionFilterReferenceData(validCandidate, client as never))
+    await expect(stagePokemonOptionFilterReferenceData(validCandidate, client as never))
       .rejects.toThrow('핵심 기준데이터 게시본이 없습니다')
     expect(filters).toEqual([
       ['version', validCandidate.version],

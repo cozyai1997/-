@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   analyzeEvolutionPublication,
-  buildCoreReferenceSql,
+  buildValidatedCoreReferenceSql,
   prepareCoreReferenceData,
 } from '../../scripts/data/publish-core-reference-data'
 import {
@@ -14,7 +14,7 @@ import {
   type ExpectedRowCounts,
   type ReferenceDataset,
 } from '../../src/features/localization/reference-data-validation'
-import { publishValidatedCandidate } from '../../scripts/data/publish-reference-data'
+import { buildValidatedCandidateState } from '../../scripts/data/publish-reference-data'
 import { createProductionReferenceCandidate } from '../fixtures/reference-data/production-candidate'
 
 const reviewedSourceCommits = {
@@ -203,6 +203,17 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
       .toThrow('evolutions:eevee>vaporeon:74:forms:vaporeon-normal')
   })
 
+  it('명시적 대상 폼이 없으면 게시 경계에서 거부한다', () => {
+    const candidate = structuredClone(dataset)
+    candidate.evolutions = [{
+      id: 'eevee>eevee:explicit-missing', fromSpeciesId: 'eevee', toSpeciesId: 'eevee',
+      toFormId: 'eevee-mega', conditionKo: '키스톤 사용',
+    }]
+
+    expect(() => analyzeEvolutionPublication(candidate))
+      .toThrow('evolutions:eevee>eevee:explicit-missing:forms:eevee-mega')
+  })
+
   it('암시적 출발 기본 폼이 없으면 게시 경계에서 거부한다', () => {
     const candidate = structuredClone(dataset)
     candidate.species.push({
@@ -263,7 +274,7 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
 
   it('실패 시 일부 행이 노출되지 않도록 하나의 트랜잭션 SQL을 만든다', () => {
     const candidate = createProductionReferenceCandidate()
-    const sql = buildCoreReferenceSql(candidate)
+    const sql = buildValidatedCoreReferenceSql(candidate)
 
     expect(sql).toMatch(/^do \$publication\$/u)
     expect(sql).toContain('declare target_publication_id uuid;')
@@ -293,14 +304,14 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
     const candidate = createProductionReferenceCandidate()
     tamper(candidate)
 
-    expect(() => buildCoreReferenceSql(candidate)).toThrow(issue)
+    expect(() => buildValidatedCoreReferenceSql(candidate)).toThrow(issue)
   })
 
-  it('핵심 게시 CLI는 검증 실패 후보의 출력 파일을 만들지 않는다', () => {
-    const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'pokemon-core-publication-'))
-    const inputPath = resolve(temporaryDirectory, 'invalid-candidate.json')
+  it('핵심 게시 CLI는 trusted source 없이 유효 후보 SQL을 만들지 않는다', () => {
+    const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'pokemon-core-auth-'))
+    const inputPath = resolve(temporaryDirectory, 'candidate.json')
     const outputPath = resolve(temporaryDirectory, 'publication.sql')
-    writeFileSync(inputPath, JSON.stringify(dataset), 'utf8')
+    writeFileSync(inputPath, JSON.stringify(createProductionReferenceCandidate()), 'utf8')
 
     try {
       const result = spawnSync(process.execPath, [
@@ -311,7 +322,7 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
       ], { cwd: process.cwd(), encoding: 'utf8', timeout: 30_000 })
 
       expect(result.status).not.toBe(0)
-      expect(`${result.stdout}${result.stderr}`).toContain('기준데이터 검증 실패')
+      expect(`${result.stdout}${result.stderr}`).toContain('--source')
       expect(existsSync(outputPath)).toBe(false)
     } finally {
       rmSync(temporaryDirectory, { recursive: true, force: true })
@@ -341,6 +352,6 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
     expect(report.countMismatches).toEqual([])
     expect(report.manifestIssues).toEqual([])
     expect(report.battleDataIssues).toEqual(['forms:eevee-normal:baseStats'])
-    expect(publishValidatedCandidate(current, candidate, report)).toBe(current)
+    expect(buildValidatedCandidateState(current, candidate, report)).toBe(current)
   })
 })

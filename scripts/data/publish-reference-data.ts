@@ -6,6 +6,13 @@ import type {
   ReferenceDataset,
   ValidationReport,
 } from '../../src/features/localization/reference-data-validation'
+import {
+  authenticateReferenceDataset,
+  authenticateReferenceDatasetAgainstTrustedDataset,
+  verifyCandidateValidationArtifact,
+  type CandidateValidationArtifact,
+  type ReferenceDatasetAuthentication,
+} from './authenticate-reference-data'
 import { writeJsonAtomically } from './validate-reference-data'
 
 export type PublicationState = {
@@ -16,6 +23,7 @@ export type PublicationState = {
     rowCounts: ValidationReport['rowCounts']
     sourceCommits: Record<string, string>
     sha256: Record<string, string>
+    candidateDigest?: string
   }>
 }
 
@@ -24,21 +32,24 @@ function argument(name: string): string | undefined {
   return index >= 0 ? process.argv[index + 1] : undefined
 }
 
-export function publishValidatedCandidate(
+export function buildValidatedCandidateState(
   currentState: PublicationState,
   dataset: ReferenceDataset,
   report: ValidationReport,
+  authentication?: ReferenceDatasetAuthentication,
 ): PublicationState {
   if (!report.valid) return currentState
-  const id = createHash('sha256')
-    .update(JSON.stringify({ version: dataset.version, sha256: dataset.sha256 }))
-    .digest('hex')
+  const id = authentication?.candidateDigest
+    ?? createHash('sha256')
+      .update(JSON.stringify({ version: dataset.version, sha256: dataset.sha256 }))
+      .digest('hex')
   const publication = {
     id,
     version: dataset.version,
     rowCounts: report.rowCounts,
     sourceCommits: dataset.sourceCommits,
     sha256: dataset.sha256,
+    candidateDigest: authentication?.candidateDigest,
   }
   return {
     activePublicationId: id,
@@ -46,17 +57,58 @@ export function publishValidatedCandidate(
   }
 }
 
+function publishAuthenticatedCandidateWithAuthentication(
+  currentState: PublicationState,
+  dataset: ReferenceDataset,
+  artifact: CandidateValidationArtifact,
+  authentication: ReferenceDatasetAuthentication,
+): PublicationState {
+  const computedReport = verifyCandidateValidationArtifact(dataset, artifact)
+  return buildValidatedCandidateState(currentState, dataset, computedReport, authentication)
+}
+
+export function publishAuthenticatedCandidateAgainstTrustedDataset(
+  currentState: PublicationState,
+  dataset: ReferenceDataset,
+  artifact: CandidateValidationArtifact,
+  trustedDataset: ReferenceDataset,
+): PublicationState {
+  const authentication = authenticateReferenceDatasetAgainstTrustedDataset(dataset, trustedDataset)
+  return publishAuthenticatedCandidateWithAuthentication(
+    currentState,
+    dataset,
+    artifact,
+    authentication,
+  )
+}
+
+export function publishValidatedCandidate(
+  currentState: PublicationState,
+  dataset: ReferenceDataset,
+  artifact: CandidateValidationArtifact,
+  trustedSourceRoot: string,
+): PublicationState {
+  const authentication = authenticateReferenceDataset(dataset, trustedSourceRoot)
+  return publishAuthenticatedCandidateWithAuthentication(
+    currentState,
+    dataset,
+    artifact,
+    authentication,
+  )
+}
+
 function main(): void {
   const input = argument('--input')
   const reportPath = argument('--report')
+  const source = argument('--source')
   const statePath = argument('--state')
-  if (!input || !reportPath || !statePath) {
+  if (!input || !reportPath || !source || !statePath) {
     throw new Error(
-      '사용법: tsx scripts/data/publish-reference-data.ts --input <후보 JSON> --report <보고서 JSON> --state <게시 상태 JSON>',
+      '사용법: tsx scripts/data/publish-reference-data.ts --input <후보 JSON> --report <검증 artifact JSON> --source <신뢰 원본 폴더> --state <게시 상태 JSON>',
     )
   }
   const dataset = JSON.parse(readFileSync(resolve(input), 'utf8')) as ReferenceDataset
-  const report = JSON.parse(readFileSync(resolve(reportPath), 'utf8')) as ValidationReport
+  const report = JSON.parse(readFileSync(resolve(reportPath), 'utf8')) as CandidateValidationArtifact
   const target = resolve(statePath)
   let current: PublicationState = { activePublicationId: null, publications: [] }
   try {
@@ -65,7 +117,7 @@ function main(): void {
     const code = (error as NodeJS.ErrnoException).code
     if (code !== 'ENOENT') throw error
   }
-  const next = publishValidatedCandidate(current, dataset, report)
+  const next = publishValidatedCandidate(current, dataset, report, source)
   if (next === current) {
     throw new Error('검증에 실패한 후보는 게시할 수 없습니다. 기존 활성 게시 버전을 유지합니다.')
   }

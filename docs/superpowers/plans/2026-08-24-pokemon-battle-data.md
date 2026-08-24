@@ -662,7 +662,8 @@
 - [ ] **Step 4: Generate and validate the real candidate**
 
   ```powershell
-  pnpm data:import -- --source 'C:\Users\PARKSUNGSIK\OneDrive\문서\Desktop\Cobbleverse_Pokemon_Manager_Package_v1.3_TABLE_FIX' --output .reference-data/candidate.json
+  $referenceSource = (Resolve-Path '<trusted-source-folder>').Path
+  pnpm data:import -- --source $referenceSource --output .reference-data/candidate.json
   pnpm data:validate -- --input .reference-data/candidate.json --report .reference-data/validation-report.json
   ```
 
@@ -685,9 +686,43 @@
 
   Expected: every command exits 0 with no warnings or residue.
 
-- [ ] **Step 6: Apply Supabase production migration and publish reference data**
+- [ ] **Step 6: Apply Supabase production migration and publish the same authenticated artifact**
 
-  Confirm the linked project is `ipbqrgsdkoqtuqgnewrs`, then run `pnpm exec supabase db push --linked` followed by `pnpm data:publish:option-filters -- --input .reference-data/candidate.json` with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` supplied by the configured production environment. Query the active publication afterward and verify all exact counts and active RLS reads before deploying the app.
+  Confirm the linked project is exactly `ipbqrgsdkoqtuqgnewrs`, then run `pnpm exec supabase db push --linked`. Before any data write, run the following read-only query and programmatically require exactly one active row whose version is `Cobbleverse 1.7.42+Cobblemon 1.7.3`, with 1,498 forms and 116,519 learnsets. If the active version or these counts differ, stop: activating a new core-only publication before its option rows are ready would expose an incomplete version.
+
+  Generate a fresh authenticated SQL artifact only for this release, execute that exact file, and prove it was not replaced between generation and execution:
+
+  ```powershell
+  $activeSql = @"
+  select publication.version,
+    (select count(*) from public.reference_forms as form where form.publication_id = publication.id) as forms,
+    (select count(*) from public.reference_move_learnsets as learnset where learnset.publication_id = publication.id) as learnsets
+  from public.data_publications as publication
+  where publication.status = 'active'
+  "@
+  $activeRows = @(pnpm exec supabase db query --linked --output-format json $activeSql | ConvertFrom-Json)
+  if ($LASTEXITCODE -ne 0 -or $activeRows.Count -ne 1 -or
+      $activeRows[0].version -ne 'Cobbleverse 1.7.42+Cobblemon 1.7.3' -or
+      [int]$activeRows[0].forms -ne 1498 -or [int]$activeRows[0].learnsets -ne 116519) {
+    throw '현재 운영 게시 버전/수량이 검토된 동일-version 갱신 전제와 다릅니다.'
+  }
+
+  $coreSql = Join-Path ([IO.Path]::GetTempPath()) ("pokemon-core-publication-{0}.sql" -f [guid]::NewGuid().ToString('N'))
+  try {
+    pnpm data:publish:core -- --input .reference-data/candidate.json --source $referenceSource --output $coreSql
+    if ($LASTEXITCODE -ne 0) { throw '인증된 핵심 게시 SQL 생성 실패' }
+    $coreSqlHash = (Get-FileHash -LiteralPath $coreSql -Algorithm SHA256).Hash
+    pnpm exec supabase db query --linked --file $coreSql
+    if ($LASTEXITCODE -ne 0) { throw '핵심 게시 SQL 실행 실패' }
+    if ((Get-FileHash -LiteralPath $coreSql -Algorithm SHA256).Hash -ne $coreSqlHash) { throw '게시 SQL 파일이 실행 전후 변경되었습니다.' }
+    pnpm data:publish:option-filters -- --input .reference-data/candidate.json --source $referenceSource
+    if ($LASTEXITCODE -ne 0) { throw '옵션 기준데이터 게시 실패' }
+  } finally {
+    if (Test-Path -LiteralPath $coreSql) { Remove-Item -LiteralPath $coreSql -Force }
+  }
+  ```
+
+  Do not reuse `.reference-data/core-publication.sql` or any prior SQL file. Both publisher CLIs independently re-import `$referenceSource` and compare the full canonical candidate digest before SQL generation or the first database call. Query the active publication afterward and verify all exact counts and active RLS reads before deploying the app.
 
 - [ ] **Step 7: Commit final E2E/integration changes and push GitHub**
 

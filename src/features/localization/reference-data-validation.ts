@@ -416,7 +416,7 @@ export function collectEvolutionFormIntegrityIssues(
     if (toForm && toForm.speciesId !== row.toSpeciesId) {
       issues.push({ key, target: `formSpecies:${toForm.speciesId}` })
     }
-    if (!toForm && !row.toFormId && !trustedMissingTargetKeys.has(key)) {
+    if (!toForm && !trustedMissingTargetKeys.has(key)) {
       issues.push({ key, target: `forms:${toFormId}` })
       return
     }

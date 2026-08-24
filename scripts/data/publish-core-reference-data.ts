@@ -8,6 +8,10 @@ import {
   collectEvolutionFormIntegrityIssues,
   type ReferenceDataset,
 } from '../../src/features/localization/reference-data-validation'
+import {
+  authenticateReferenceDataset,
+  type ReferenceDatasetAuthentication,
+} from './authenticate-reference-data'
 
 const hangulPattern = /[ㄱ-ㅎㅏ-ㅣ가-힣]/u
 
@@ -193,8 +197,20 @@ function jsonLiteral(value: unknown): string {
   return `${sqlLiteral(JSON.stringify(value))}::jsonb`
 }
 
-export function buildCoreReferenceSql(dataset: ReferenceDataset): string {
+function buildCoreReferenceSqlWithAuthentication(
+  dataset: ReferenceDataset,
+  authentication?: ReferenceDatasetAuthentication,
+): string {
   const validationReport = assertValidReferenceDataForPublication(dataset)
+  const publicationReport = authentication ? {
+    ...validationReport,
+    authentication: {
+      method: authentication.method,
+      candidateDigest: authentication.candidateDigest,
+      trustedSourceDigest: authentication.trustedSourceDigest,
+      evolutionAccounting: authentication.evolutionAccounting,
+    },
+  } : validationReport
   const data: CoreReferenceData = prepareCoreReferenceData(dataset)
   const version = sqlLiteral(dataset.version)
   const rowCounts = Object.fromEntries(
@@ -214,7 +230,7 @@ insert into public.data_publications (
   version, status, source_manifest, row_counts, sha256, validation_report, validated_at
 ) values (
   ${version}, 'validated', ${jsonLiteral(dataset.sourceCommits)}, ${jsonLiteral(rowCounts)},
-  ${jsonLiteral(dataset.sha256)}, ${jsonLiteral(validationReport)}, now()
+  ${jsonLiteral(dataset.sha256)}, ${jsonLiteral(publicationReport)}, now()
 )
 on conflict (version) do update set
   status = 'validated', source_manifest = excluded.source_manifest,
@@ -332,6 +348,18 @@ $publication$;
 `
 }
 
+export function buildValidatedCoreReferenceSql(dataset: ReferenceDataset): string {
+  return buildCoreReferenceSqlWithAuthentication(dataset)
+}
+
+export function buildCoreReferenceSql(
+  dataset: ReferenceDataset,
+  trustedSourceRoot: string,
+): string {
+  const authentication = authenticateReferenceDataset(dataset, trustedSourceRoot)
+  return buildCoreReferenceSqlWithAuthentication(dataset, authentication)
+}
+
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name)
   return index >= 0 ? process.argv[index + 1] : undefined
@@ -339,13 +367,16 @@ function argument(name: string): string | undefined {
 
 function main(): void {
   const input = argument('--input')
+  const source = argument('--source')
   const output = argument('--output')
-  if (!input || !output) {
-    throw new Error('사용법: tsx scripts/data/publish-core-reference-data.ts --input <후보 JSON> --output <SQL 파일>')
+  if (!input || !source || !output) {
+    throw new Error(
+      '사용법: tsx scripts/data/publish-core-reference-data.ts --input <후보 JSON> --source <신뢰 원본 폴더> --output <SQL 파일>',
+    )
   }
   const dataset = JSON.parse(readFileSync(resolve(input), 'utf8')) as ReferenceDataset
   const target = resolve(output)
-  const sql = buildCoreReferenceSql(dataset)
+  const sql = buildCoreReferenceSql(dataset, source)
   mkdirSync(dirname(target), { recursive: true })
   const temporary = `${target}.tmp`
   writeFileSync(temporary, sql, 'utf8')

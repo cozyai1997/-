@@ -11,7 +11,7 @@ import {
   type ExpectedRowCounts,
   type ReferenceDataset,
 } from '@/features/localization/reference-data-validation'
-import { publishValidatedCandidate } from '../../scripts/data/publish-reference-data'
+import { buildValidatedCandidateState } from '../../scripts/data/publish-reference-data'
 
 const fixtureCounts: ExpectedRowCounts = {
   types: 1,
@@ -365,6 +365,26 @@ describe('한국어 기준 데이터 공개 검증', () => {
     })
   })
 
+  it('명시적 대상 폼이 실제로 없으면 거부한다', () => {
+    const dataset = structuredClone(completeFixture) as ReferenceDataset
+    dataset.evolutions = [{
+      id: 'eevee>eevee:explicit-missing', fromSpeciesId: 'eevee', toSpeciesId: 'eevee',
+      toFormId: 'eevee-mega', conditionKo: '키스톤 사용',
+    }]
+    dataset.reportedCounts.evolutions = 1
+
+    const report = validateReferenceData(dataset, {
+      expectedRowCounts: { ...fixtureCounts, evolutions: 1 },
+      expectedBattleRowCounts: fixtureBattleCounts,
+      expectedBattleDatasetProfile: fixtureBattleProfile,
+    })
+
+    expect(report.valid).toBe(false)
+    expect(report.brokenReferences).toContainEqual({
+      table: 'evolutions', key: 'eevee>eevee:explicit-missing', target: 'forms:eevee-mega',
+    })
+  })
+
   it('암시적 출발 기본 폼이 실제로 없으면 거부한다', () => {
     const dataset = structuredClone(completeFixture) as ReferenceDataset
     dataset.species.push({
@@ -441,7 +461,7 @@ describe('한국어 기준 데이터 공개 검증', () => {
     expect(chooseActivePublicationId('current-publication', 'candidate-publication', invalidReport)).toBe(
       'current-publication',
     )
-    expect(publishValidatedCandidate(current, dataset, invalidReport)).toBe(current)
+    expect(buildValidatedCandidateState(current, dataset, invalidReport)).toBe(current)
   })
 
   it('검증을 통과한 후보만 새 활성 게시 상태로 원자적으로 교체한다', () => {
@@ -464,7 +484,7 @@ describe('한국어 기준 데이터 공개 검증', () => {
       ],
     }
 
-    const next = publishValidatedCandidate(current, dataset, report)
+    const next = buildValidatedCandidateState(current, dataset, report)
 
     expect(next).not.toBe(current)
     expect(next.activePublicationId).toMatch(/^[0-9a-f]{64}$/u)

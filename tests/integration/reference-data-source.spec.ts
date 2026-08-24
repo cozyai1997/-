@@ -4,7 +4,11 @@ import { parse } from 'csv-parse/sync'
 import { describe, expect, it } from 'vitest'
 
 import { importReferenceData } from '../../scripts/data/import-reference-data'
-import { analyzeEvolutionPublication } from '../../scripts/data/publish-core-reference-data'
+import {
+  analyzeEvolutionPublication,
+  buildCoreReferenceSql,
+} from '../../scripts/data/publish-core-reference-data'
+import { canonicalReferenceDatasetDigest } from '../../scripts/data/authenticate-reference-data'
 import { validateReferenceData } from '../../src/features/localization/reference-data-validation'
 
 type CsvRow = Record<string, string>
@@ -106,6 +110,8 @@ describe.runIf(enabled)('실제 기준데이터 원본 독립 완전성', () => 
     const typeIds = new Set(sources.typeMatchups.flatMap((row) => [row.AttackType, row.DefenseType]))
     const publication = analyzeEvolutionPublication(candidate)
     const validation = validateReferenceData(candidate)
+    const candidateDigest = canonicalReferenceDatasetDigest(candidate)
+    const authenticatedSql = buildCoreReferenceSql(candidate, sourceRoot)
 
     expect(typeIds.size).toBe(18)
     expect(candidate.types).toHaveLength(typeIds.size)
@@ -113,6 +119,14 @@ describe.runIf(enabled)('실제 기준데이터 원본 독립 완전성', () => 
     expect(candidate.battleOnlyDiagnostics).toHaveLength(9)
     expect(validation.valid, JSON.stringify(validation)).toBe(true)
     expect(validation.sourceDiagnosticIssues).toEqual([])
+    expect(candidateDigest).toMatch(/^[0-9a-f]{64}$/u)
+    expect(authenticatedSql).toContain(`"candidateDigest":"${candidateDigest}"`)
+    expect(authenticatedSql).toContain(`"trustedSourceDigest":"${candidateDigest}"`)
+    expect(authenticatedSql).toContain('"method":"trusted-source-reimport-sha256"')
+    expect(authenticatedSql).toContain('"sourceCount":602')
+    expect(authenticatedSql).toContain('"publishableCount":600')
+    expect(authenticatedSql).toContain('"excludedMissingTargetCount":2')
+    expect(authenticatedSql).toContain('"valid":true')
     expect(candidate.sourceDiagnostics).toEqual([
       { code: 'missing-evolution-target-form', table: 'evolutions', key: 'milotic>megamilotic:233', target: 'forms:milotic-mega' },
       { code: 'missing-evolution-target-form', table: 'evolutions', key: 'milotic>megamilotic:234', target: 'forms:milotic-mega' },
@@ -137,5 +151,5 @@ describe.runIf(enabled)('실제 기준데이터 원본 독립 완전성', () => 
     expect(publication.publishableCount + publication.excludedPureSameSpeciesCount
       + publication.excludedMissingTargetCount + publication.excludedInvalidCount)
       .toBe(sources.evolutions.length)
-  })
+  }, 15_000)
 })
