@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 
+import { StatGlossary } from '@/components/pokemon/stat-glossary'
 import { calculateAllStats } from '@/features/stats/calculate-stat'
 import {
   nonHpStatKeys,
@@ -29,6 +30,7 @@ const initialInput: StatCalculationInput = {
   ev: { hp: 0, attack: 0, defense: 0, special_attack: 0, special_defense: 0, speed: 0 },
   level: 50,
   nature: { increased: null, decreased: null },
+  hpRule: 'standard',
 }
 
 export function StatsCalculator() {
@@ -94,7 +96,26 @@ export function StatsCalculator() {
         </label>
       </div>
 
+      <StatGlossary />
+
       <div className="nature-controls">
+        <label htmlFor="calculator-hp-rule">HP 계산 규칙
+          <select
+            id="calculator-hp-rule"
+            value={input.hpRule}
+            onChange={(event) => {
+              setResult(null)
+              setErrors([])
+              setInput({
+                ...input,
+                hpRule: event.target.value as NonNullable<StatCalculationInput['hpRule']>,
+              })
+            }}
+          >
+            <option value="standard">일반</option>
+            <option value="fixed-one">껍질몬(HP는 항상 1)</option>
+          </select>
+        </label>
         <label htmlFor="nature-increased">상승 능력치
           <select id="nature-increased" value={input.nature.increased ?? ''} onChange={(event) => updateNature('increased', event.target.value)}>
             <option value="">없음</option>
@@ -140,7 +161,7 @@ export function StatsCalculator() {
       {result ? <div className="stats-result-panel">
         <h2>계산 결과</h2>
         <table>
-          <thead><tr><th>능력치</th><th>종족값</th><th>IV</th><th>EV</th><th>최종</th></tr></thead>
+          <thead><tr><th>능력치</th><th>종족값</th><th>IV</th><th>EV</th><th>실제 능력치 Stats</th></tr></thead>
           <tbody>
             {statKeys.map((key) => (
               <tr key={key}>

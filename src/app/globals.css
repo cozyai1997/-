@@ -715,6 +715,22 @@ kbd {
   color: var(--muted);
 }
 
+.detail-heading .battle-badges {
+  margin-top: 0.75rem;
+}
+
+.battle-overview {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.detail-move-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem;
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(16rem, 0.8fr);

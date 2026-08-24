@@ -135,13 +135,15 @@ export function reconcileFilteredSelections(
   }
 }
 
-export function reconcileBattleSelections(
-  draft: RegistrationDraft,
+export function reconcileBattleSelections<
+  T extends Pick<OwnedPokemonInput, 'teraTypeId' | 'hasGigantamaxFactor'>,
+>(
+  draft: T,
   battle: {
     teraTypes: ReadonlyArray<{ id: string; nameKo: string }>
     canGigantamax: boolean
   },
-): RegistrationDraft {
+): T {
   const allowedTeraTypeIds = new Set(battle.teraTypes.map((teraType) => teraType.id))
   return {
     ...draft,

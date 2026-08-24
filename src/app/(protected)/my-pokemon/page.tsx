@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import type { Route } from 'next'
 
+import { PokemonBattleBadges } from '@/components/pokemon/pokemon-battle-badges'
 import { PrivatePokemonImage } from '@/components/pokemon/private-pokemon-image'
 import { listOwnedPokemon } from '@/features/owned-pokemon/repository'
 import { createClient } from '@/lib/supabase/server'
@@ -27,6 +28,10 @@ export default async function MyPokemonPage() {
               <h2>{item.nickname || item.nameKo}</h2>
               <p>{item.nameKo} · {item.formNameKo}</p>
               <span>Lv. {item.level}</span>
+              <PokemonBattleBadges
+                teraTypeNameKo={item.teraTypeNameKo}
+                hasGigantamaxFactor={item.hasGigantamaxFactor}
+              />
               <Link
                 className="card-link"
                 href={`/my-pokemon/detail?dex=${String(item.nationalDexNumber).padStart(4, '0')}&entry=${item.entry}` as Route}

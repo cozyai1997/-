@@ -4,16 +4,26 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { PokemonBattleBadges } from '@/components/pokemon/pokemon-battle-badges'
+import { PokemonBattleFields } from '@/components/pokemon/pokemon-battle-fields'
+import { PokemonMoveCard } from '@/components/pokemon/pokemon-move-card'
+import { PokemonStatTable } from '@/components/pokemon/pokemon-stat-table'
 import { PrivatePokemonImage } from '@/components/pokemon/private-pokemon-image'
 import {
   correctOwnedPokemon,
   listPokemonFilteredOptions,
-  type AbilityOption,
   type OwnedPokemonDetail,
   type OwnedPokemonEditOptions,
+  type PokemonFilteredOptions,
   updateOwnedPokemonQuick,
 } from '@/features/owned-pokemon/repository'
+import { reconcileBattleSelections } from '@/features/owned-pokemon/registration-state'
 import { statKeys, validateOwnedPokemon } from '@/features/owned-pokemon/schema'
+import {
+  calculateOwnedPokemonStats,
+  type OwnedPokemonStatResult,
+} from '@/features/stats/calculate-owned-pokemon-stats'
+import type { NatureAdjustment } from '@/features/stats/types'
 import { createClient } from '@/lib/supabase/client'
 
 const statLabels = {
@@ -47,8 +57,8 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
   const [quickFilter, setQuickFilter] = useState<{
     key: string
     status: FilterStatus
-    abilities: AbilityOption[]
-  }>({ key: '', status: 'idle', abilities: [] })
+    options: PokemonFilteredOptions | null
+  }>({ key: '', status: 'idle', options: null })
   const [correctionFilterStatus, setCorrectionFilterStatus] = useState<FilterStatus>('idle')
   const quickRequestVersion = useRef(0)
   const correctionRequestVersion = useRef(0)
@@ -61,8 +71,29 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
   const quickFilterStatus = quickFilter.key === quickFilterKey
     ? quickFilter.status
     : 'loading'
-  const quickAbilities = quickFilter.key === quickFilterKey ? quickFilter.abilities : []
+  const quickOptions = quickFilter.key === quickFilterKey ? quickFilter.options : null
+  const quickAbilities = quickOptions?.abilities ?? []
   const selectedQuickAbility = quickAbilities.find((ability) => ability.id === draft.abilityId)
+  const selectedNature = options.natures.find((nature) => nature.id === pokemon.effectiveNatureId)
+  const natureAdjustment = effectiveNatureAdjustment(pokemon.effectiveNatureId, selectedNature)
+  const actualStats: OwnedPokemonStatResult = quickFilterStatus !== 'loaded' || !quickOptions
+    ? {
+        status: 'unavailable',
+        reasonKo: '최신 폼 전투 정보를 불러오지 못해 실제 능력치를 계산할 수 없습니다.',
+      }
+    : natureAdjustment === undefined
+      ? {
+          status: 'unavailable',
+          reasonKo: '성격 보정 정보가 불완전하여 실제 능력치를 계산할 수 없습니다.',
+        }
+      : calculateOwnedPokemonStats({
+          baseStats: quickOptions.battle.baseStats,
+          effectiveIv: pokemon.effectiveIv,
+          ev: pokemon.ev,
+          level: pokemon.level,
+          nature: natureAdjustment,
+          hpRule: quickOptions.battle.hpRule,
+        })
 
   useEffect(() => {
     mounted.current = true
@@ -80,17 +111,17 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
       .then((loaded) => {
         if (!mounted.current || quickRequestVersion.current !== version) return
         const allowedAbilityIds = new Set(loaded.abilities.map((ability) => ability.id))
-        setDraft((current) => ({
+        setDraft((current) => reconcileBattleSelections({
           ...current,
           abilityId: current.abilityId && allowedAbilityIds.has(current.abilityId)
             ? current.abilityId
             : null,
-        }))
-        setQuickFilter({ key, status: 'loaded', abilities: loaded.abilities })
+        }, loaded.battle))
+        setQuickFilter({ key, status: 'loaded', options: loaded })
       })
       .catch(() => {
         if (!mounted.current || quickRequestVersion.current !== version) return
-        setQuickFilter({ key, status: 'error', abilities: [] })
+        setQuickFilter({ key, status: 'error', options: null })
       })
   }, [pokemon.formId, pokemon.speciesId])
 
@@ -104,7 +135,7 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
       const speciesChanged = speciesId !== pokemon.speciesId
       setCorrection((current) => {
         if (current.speciesId !== speciesId || current.formId !== formId) return current
-        return {
+        return reconcileBattleSelections({
           ...current,
           abilityId: speciesChanged
             ? null
@@ -113,7 +144,7 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
               : null,
           currentMoves: speciesChanged ? [] : pokemon.currentMoves,
           targetMoves: speciesChanged ? [] : pokemon.targetMoves,
-        }
+        }, loaded.battle)
       })
       setCorrectionFilterStatus('loaded')
     } catch {
@@ -132,7 +163,14 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
     setPending(true)
     try {
       await updateOwnedPokemonQuick(createClient(), pokemon.id, draft)
-      setPokemon(draft)
+      const teraTypeNameKo = quickOptions?.battle.teraTypes.find(
+        (type) => type.id === draft.teraTypeId,
+      )?.nameKo ?? null
+      setPokemon({
+        ...draft,
+        teraTypeNameKo,
+        battle: quickOptions?.battle ?? pokemon.battle,
+      })
       setMessage('빠른 수정 내용을 저장했습니다.')
     } catch {
       setMessage('빠른 수정 내용을 저장하지 못했습니다.')
@@ -305,8 +343,43 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
           <p>{pokemon.nameKo} · {pokemon.formNameKo} · <strong>Lv. {pokemon.level}</strong></p>
           {pokemon.notes ? <p>{pokemon.notes}</p> : null}
           <p>포획일: {pokemon.capturedOn || '미입력'}</p>
+          <div aria-label="저장된 전투 설정">
+            <PokemonBattleBadges
+              teraTypeNameKo={pokemon.teraTypeNameKo}
+              hasGigantamaxFactor={pokemon.hasGigantamaxFactor}
+            />
+          </div>
         </div>
       </div>
+
+      <section className="detail-panel battle-overview" aria-labelledby="battle-overview-title">
+        <h2 id="battle-overview-title">전투 정보</h2>
+        <PokemonStatTable
+          baseStats={quickOptions?.battle.baseStats ?? null}
+          originalIv={pokemon.originalIv}
+          effectiveIv={pokemon.effectiveIv}
+          ev={pokemon.ev}
+          actualStats={actualStats}
+          caption="보유 포켓몬 능력치"
+        />
+        <div className="detail-move-card-grid">
+          {pokemon.currentMoveDetails.map((move, index) => (
+            <PokemonMoveCard
+              key={`detail-current-${move.moveId}-${move.slot}`}
+              move={move}
+              heading={`현재 기술 ${index + 1}`}
+            />
+          ))}
+          {pokemon.targetMoveDetails.map((move, index) => (
+            <PokemonMoveCard
+              key={`detail-target-${move.moveId}-${move.slot}`}
+              move={move}
+              heading={`목표 기술 ${index + 1}`}
+              conditionKo={move.conditionKo}
+            />
+          ))}
+        </div>
+      </section>
 
       <section className="detail-panel image-panel" aria-labelledby="private-image-title">
         <h2 id="private-image-title">비공개 개인 이미지</h2>
@@ -371,6 +444,24 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
             {quickFilterStatus === 'loaded' && quickAbilities.length === 0
               ? <p role="status" aria-live="polite">선택한 모습에 등록된 특성이 없습니다.</p>
               : null}
+            {quickFilterStatus === 'loaded' && quickOptions ? (
+              <PokemonBattleFields
+                teraTypes={quickOptions.battle.teraTypes}
+                teraTypeId={draft.teraTypeId}
+                canGigantamax={quickOptions.battle.canGigantamax}
+                hasGigantamaxFactor={draft.hasGigantamaxFactor}
+                onTeraTypeChange={(teraTypeId) => setDraft((current) => ({
+                  ...current,
+                  teraTypeId,
+                }))}
+                onGigantamaxFactorChange={(hasGigantamaxFactor) => setDraft((current) => ({
+                  ...current,
+                  hasGigantamaxFactor,
+                }))}
+                disabled={pending}
+                idPrefix="quick-battle"
+              />
+            ) : null}
             <label htmlFor="quick-item">지닌 도구</label>
             <select id="quick-item" value={draft.heldItemId ?? ''} onChange={(event) => setDraft({ ...draft, heldItemId: event.target.value || null })}>
               <option value="">없음</option>{options.items.map((item) => <option key={item.id} value={item.id}>{item.nameKo}</option>)}
@@ -447,4 +538,20 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
       {message ? <p className="save-message" role="status">{message}</p> : null}
     </>
   )
+}
+
+function effectiveNatureAdjustment(
+  effectiveNatureId: string | null,
+  nature: OwnedPokemonEditOptions['natures'][number] | undefined,
+): NatureAdjustment | null | undefined {
+  if (effectiveNatureId === null) return null
+  if (
+    !nature
+    || !Object.hasOwn(nature, 'increasedStat')
+    || !Object.hasOwn(nature, 'decreasedStat')
+  ) return undefined
+  return {
+    increased: nature.increasedStat,
+    decreased: nature.decreasedStat,
+  }
 }
