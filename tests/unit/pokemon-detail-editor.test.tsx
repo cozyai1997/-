@@ -64,13 +64,20 @@ const options: OwnedPokemonEditOptions = {
       forms: [{ id: 'form-electric', nameKo: '기본 모습', isDefault: true }],
     },
   ],
-  natures: [{ id: 'nature-jolly', nameKo: '명랑' }],
+  natures: [{ id: 'nature-jolly', nameKo: '명랑', increasedStat: 'speed', decreasedStat: 'special_attack' }],
   abilities: [
     { id: 'ability-water', nameKo: '저수' },
     { id: 'ability-wave', nameKo: '촉촉바디' },
     { id: 'ability-global-only', nameKo: '전역 전용 특성' },
   ],
   items: [{ id: 'item-water', nameKo: '신비의물방울' }],
+}
+
+const standardBattle = {
+  baseStats: { hp: 65, attack: 65, defense: 60, special_attack: 110, special_defense: 95, speed: 130 },
+  hpRule: 'standard' as const,
+  teraTypes: [{ id: 'tera-water', nameKo: '물' }],
+  canGigantamax: false,
 }
 
 const baseOptions: PokemonFilteredOptions = {
@@ -91,6 +98,7 @@ const baseOptions: PokemonFilteredOptions = {
     pp: 15,
     routes: [{ methodKo: '기술머신', conditionKo: '기술머신 123으로 습득' }],
   }],
+  battle: standardBattle,
 }
 
 const waveOptions: PokemonFilteredOptions = {
@@ -101,11 +109,13 @@ const waveOptions: PokemonFilteredOptions = {
     isHidden: false,
   }],
   moves: baseOptions.moves,
+  battle: standardBattle,
 }
 
 const electricOptions: PokemonFilteredOptions = {
   abilities: [],
   moves: [],
+  battle: standardBattle,
 }
 
 function pokemon(overrides: Partial<OwnedPokemonDetail> = {}): OwnedPokemonDetail {
@@ -128,6 +138,10 @@ function pokemon(overrides: Partial<OwnedPokemonDetail> = {}): OwnedPokemonDetai
     effectiveNatureNameKo: null,
     abilityNameKo: '저수',
     heldItemNameKo: null,
+    teraTypeNameKo: null,
+    battle: standardBattle,
+    currentMoveDetails: [],
+    targetMoveDetails: [],
     evolutionRules: [],
     ...overrides,
   }

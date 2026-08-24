@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/types/database.generated'
 
 import { statKeys, type OwnedPokemonInput, type StatBlock } from './schema'
+import type { HpRule, NonHpStatKey } from '../stats/types'
 
 export type SpeciesOption = {
   id: string
@@ -18,6 +19,8 @@ export type OwnedPokemonCard = {
   formNameKo: string
   nationalDexNumber: number
   entry: number
+  teraTypeNameKo: string | null
+  hasGigantamaxFactor: boolean
 }
 
 export type LookupOption = { id: string; nameKo: string }
@@ -46,9 +49,35 @@ export type MoveOption = {
   routes: MoveAcquisitionRoute[]
 }
 
+export type NatureOption = LookupOption & {
+  increasedStat: NonHpStatKey | null
+  decreasedStat: NonHpStatKey | null
+}
+
+export type FormBattleProfile = {
+  baseStats: StatBlock | null
+  hpRule: HpRule
+  teraTypes: Array<{ id: string; nameKo: string }>
+  canGigantamax: boolean
+}
+
 export type PokemonFilteredOptions = {
   abilities: AbilityOption[]
   moves: MoveOption[]
+  battle: FormBattleProfile
+}
+
+export type OwnedMoveDetail = {
+  moveId: string
+  slot: number
+  nameKo: string
+  descriptionKo: string
+  typeKo: string
+  damageClassKo: string
+  power: number | null
+  accuracy: number | null
+  pp: number | null
+  conditionKo: string | null
 }
 
 type AbilityRelationRow = {
@@ -219,11 +248,16 @@ export async function listPokemonFilteredOptions(
 
   const formRequest = client
     .from('reference_forms')
-    .select('id, species_id, base_form_id')
+    .select(`
+      id, species_id, base_form_id, is_battle_only,
+      base_hp, base_attack, base_defense, base_special_attack, base_special_defense, base_speed,
+      reference_species!inner(identifier)
+    `)
     .eq('id', formId)
     .eq('species_id', speciesId)
     .eq('publication_id', publicationId)
     .eq('is_active', true)
+    .eq('is_battle_only', false)
     .maybeSingle()
   const learnsetRequest = client
     .from('reference_move_learnsets')
@@ -259,8 +293,51 @@ export async function listPokemonFilteredOptions(
     .eq('publication_id', publicationId)
     .eq('reference_abilities.publication_id', publicationId)
     .eq('reference_abilities.is_active', true)
-  const abilityResult = await abilityRequest
+  const teraRequest = client
+    .from('reference_form_tera_options')
+    .select(`
+      tera_type_id,
+      reference_tera_types!inner(id, name_ko, sort_order, is_active)
+    `)
+    .eq('form_id', formId)
+    .eq('publication_id', publicationId)
+    .eq('reference_tera_types.publication_id', publicationId)
+    .eq('reference_tera_types.is_active', true)
+  const gigantamaxRequest = client
+    .from('reference_form_gigantamax_options')
+    .select('source_form_id')
+    .eq('source_form_id', formId)
+    .eq('publication_id', publicationId)
+    .maybeSingle()
+  const [abilityResult, teraResult, gigantamaxResult] = await Promise.all([
+    abilityRequest,
+    teraRequest,
+    gigantamaxRequest,
+  ])
   if (abilityResult.error) throw abilityResult.error
+  if (teraResult.error) throw teraResult.error
+  if (gigantamaxResult.error) throw gigantamaxResult.error
+
+  const form = formResult.data as unknown as {
+    base_hp: number | null
+    base_attack: number | null
+    base_defense: number | null
+    base_special_attack: number | null
+    base_special_defense: number | null
+    base_speed: number | null
+    reference_species: { identifier: string }
+  }
+  const teraTypes = (teraResult.data as unknown as Array<{
+    tera_type_id: string
+    reference_tera_types: { id: string; name_ko: string; sort_order: number }
+  }>)
+    .map((row) => ({
+      id: row.reference_tera_types.id,
+      nameKo: row.reference_tera_types.name_ko,
+      sortOrder: row.reference_tera_types.sort_order,
+    }))
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id))
+    .map(({ id, nameKo }) => ({ id, nameKo }))
 
   return {
     abilities: groupAbilityOptions(
@@ -269,6 +346,12 @@ export async function listPokemonFilteredOptions(
       formResult.data.base_form_id,
     ),
     moves: groupMoveOptions(learnsetResult.data as unknown as MoveLearnsetRelationRow[]),
+    battle: {
+      baseStats: toBaseStatsOrNull(form),
+      hpRule: form.reference_species.identifier === 'shedinja' ? 'fixed-one' : 'standard',
+      teraTypes,
+      canGigantamax: gigantamaxResult.data !== null,
+    },
   }
 }
 
@@ -294,6 +377,10 @@ export type OwnedPokemonDetail = OwnedPokemonInput & {
   effectiveNatureNameKo: string | null
   abilityNameKo: string | null
   heldItemNameKo: string | null
+  teraTypeNameKo: string | null
+  battle: FormBattleProfile
+  currentMoveDetails: OwnedMoveDetail[]
+  targetMoveDetails: OwnedMoveDetail[]
   evolutionRules: Array<{
     conditionKo: string
     targetNameKo: string
@@ -303,20 +390,41 @@ export type OwnedPokemonDetail = OwnedPokemonInput & {
 
 export type OwnedPokemonEditOptions = {
   species: SpeciesOption[]
-  natures: LookupOption[]
+  natures: NatureOption[]
   abilities: LookupOption[]
   items: LookupOption[]
 }
 
-export async function listSpeciesOptions(client: SupabaseClient<Database>) {
+async function getActivePublicationId(client: SupabaseClient<Database>): Promise<string> {
+  const { data, error } = await client
+    .from('data_publications')
+    .select('id')
+    .eq('status', 'active')
+    .maybeSingle()
+  if (error) throw error
+  if (!data) throw new Error('활성 기준데이터 게시본이 없습니다.')
+  return data.id
+}
+
+async function listSpeciesOptionsForPublication(
+  client: SupabaseClient<Database>,
+  publicationId: string,
+) {
   const pageSize = 1_000
   const speciesOptions: SpeciesOption[] = []
 
   for (let start = 0; ; start += pageSize) {
     const { data, error } = await client
       .from('reference_species')
-      .select('id, name_ko, national_dex_number, reference_forms(id, name_ko, is_default)')
+      .select(`
+        id, name_ko, national_dex_number,
+        reference_forms!inner(id, name_ko, is_default, is_battle_only)
+      `)
+      .eq('publication_id', publicationId)
       .eq('is_active', true)
+      .eq('reference_forms.publication_id', publicationId)
+      .eq('reference_forms.is_active', true)
+      .eq('reference_forms.is_battle_only', false)
       .order('national_dex_number')
       .range(start, start + pageSize - 1)
     if (error) throw error
@@ -325,16 +433,22 @@ export async function listSpeciesOptions(client: SupabaseClient<Database>) {
       id: species.id,
       nameKo: species.name_ko,
       nationalDexNumber: species.national_dex_number,
-      forms: species.reference_forms.map((form) => ({
+      forms: species.reference_forms
+        .filter((form) => !form.is_battle_only)
+        .map((form) => ({
         id: form.id,
         nameKo: form.name_ko,
         isDefault: form.is_default,
-      })),
+        })),
     })))
     if (data.length < pageSize) break
   }
 
   return speciesOptions
+}
+
+export async function listSpeciesOptions(client: SupabaseClient<Database>) {
+  return listSpeciesOptionsForPublication(client, await getActivePublicationId(client))
 }
 
 export async function createOwnedPokemon(
@@ -361,6 +475,8 @@ export async function createOwnedPokemon(
       move_id: move.moveId,
       condition_ko: move.conditionKo,
     })),
+    p_tera_type_id: input.teraTypeId as unknown as string,
+    p_has_gigantamax_factor: input.hasGigantamaxFactor,
   })
   if (error) throw error
   return data
@@ -369,7 +485,12 @@ export async function createOwnedPokemon(
 export async function listOwnedPokemon(client: SupabaseClient<Database>) {
   const { data, error } = await client
     .from('owned_pokemon')
-    .select('nickname, level, reference_species(name_ko, national_dex_number), reference_forms(name_ko)')
+    .select(`
+      nickname, level, has_gigantamax_factor,
+      reference_species(name_ko, national_dex_number),
+      reference_forms(name_ko),
+      tera_type:reference_tera_types(name_ko)
+    `)
     .order('created_at')
   if (error) throw error
 
@@ -385,6 +506,8 @@ export async function listOwnedPokemon(client: SupabaseClient<Database>) {
       nationalDexNumber: dex,
       formNameKo: pokemon.reference_forms.name_ko,
       entry,
+      teraTypeNameKo: pokemon.tera_type?.name_ko ?? null,
+      hasGigantamaxFactor: pokemon.has_gigantamax_factor,
     }
   }) satisfies OwnedPokemonCard[]
 }
@@ -399,9 +522,13 @@ export async function getOwnedPokemonDetail(
     .select(`
       id, species_id, form_id, nickname, gender, level, captured_on,
       original_nature_id, effective_nature_id, ability_id, original_iv,
-      effective_iv, ev, held_item_id, notes, created_at,
-      reference_species(name_ko, national_dex_number),
-      reference_forms(name_ko),
+      effective_iv, ev, held_item_id, notes, tera_type_id, has_gigantamax_factor, created_at,
+      reference_species(name_ko, national_dex_number, identifier),
+      reference_forms(
+        name_ko, base_hp, base_attack, base_defense,
+        base_special_attack, base_special_defense, base_speed
+      ),
+      tera_type:reference_tera_types(name_ko),
       original_nature:reference_natures!owned_pokemon_original_nature_id_fkey(name_ko),
       effective_nature:reference_natures!owned_pokemon_effective_nature_id_fkey(name_ko),
       ability:reference_abilities(name_ko),
@@ -429,12 +556,48 @@ export async function getOwnedPokemonDetail(
       .order('sort_order'),
     client
       .from('owned_pokemon_moves')
-      .select('move_id, kind, slot, target_condition_ko')
+      .select(`
+        move_id, kind, slot, target_condition_ko,
+        reference_moves!inner(
+          name_ko, description_ko, damage_class, power, accuracy, pp,
+          reference_types!inner(name_ko)
+        )
+      `)
       .eq('owned_pokemon_id', pokemon.id)
       .order('slot'),
   ])
   if (rulesResult.error) throw rulesResult.error
   if (movesResult.error) throw movesResult.error
+
+  const ownedMoves = movesResult.data as unknown as Array<{
+    move_id: string
+    kind: 'current' | 'target'
+    slot: number
+    target_condition_ko: string
+    reference_moves: {
+      name_ko: string
+      description_ko: string
+      damage_class: string
+      power: number | null
+      accuracy: number | null
+      pp: number | null
+      reference_types: { name_ko: string }
+    }
+  }>
+  const moveDetails = ownedMoves.map(toOwnedMoveDetail)
+  const form = pokemon.reference_forms as unknown as {
+    base_hp: number | null
+    base_attack: number | null
+    base_defense: number | null
+    base_special_attack: number | null
+    base_special_defense: number | null
+    base_speed: number | null
+  }
+  const species = pokemon.reference_species as unknown as {
+    name_ko: string
+    national_dex_number: number
+    identifier: string
+  }
 
   return {
     id: pokemon.id,
@@ -452,24 +615,33 @@ export async function getOwnedPokemonDetail(
     ev: parseStatBlock(pokemon.ev),
     heldItemId: pokemon.held_item_id,
     notes: pokemon.notes,
-    teraTypeId: null,
-    hasGigantamaxFactor: false,
-    currentMoves: movesResult.data
+    teraTypeId: pokemon.tera_type_id,
+    hasGigantamaxFactor: pokemon.has_gigantamax_factor,
+    currentMoves: ownedMoves
       .filter((move) => move.kind === 'current')
       .map((move) => ({ moveId: move.move_id })),
-    targetMoves: movesResult.data
+    targetMoves: ownedMoves
       .filter((move) => move.kind === 'target')
       .map((move) => ({
         moveId: move.move_id,
         conditionKo: move.target_condition_ko,
       })),
-    nameKo: pokemon.reference_species.name_ko,
+    nameKo: species.name_ko,
     formNameKo: pokemon.reference_forms.name_ko,
-    nationalDexNumber: pokemon.reference_species.national_dex_number,
+    nationalDexNumber: species.national_dex_number,
     originalNatureNameKo: pokemon.original_nature?.name_ko ?? null,
     effectiveNatureNameKo: pokemon.effective_nature?.name_ko ?? null,
     abilityNameKo: pokemon.ability?.name_ko ?? null,
     heldItemNameKo: pokemon.held_item?.name_ko ?? null,
+    teraTypeNameKo: pokemon.tera_type?.name_ko ?? null,
+    battle: {
+      baseStats: toBaseStatsOrNull(form),
+      hpRule: species.identifier === 'shedinja' ? 'fixed-one' : 'standard',
+      teraTypes: [],
+      canGigantamax: false,
+    },
+    currentMoveDetails: moveDetails.filter((move) => move.conditionKo === null),
+    targetMoveDetails: moveDetails.filter((move) => move.conditionKo !== null),
     evolutionRules: rulesResult.data.map((rule) => ({
       conditionKo: rule.condition_ko,
       targetNameKo: rule.target_form.reference_species.name_ko,
@@ -479,18 +651,36 @@ export async function getOwnedPokemonDetail(
 }
 
 export async function listOwnedPokemonEditOptions(client: SupabaseClient<Database>) {
+  const publicationId = await getActivePublicationId(client)
   const [species, natures, abilities, items] = await Promise.all([
-    listSpeciesOptions(client),
-    client.from('reference_natures').select('id, name_ko').eq('is_active', true).order('name_ko'),
-    client.from('reference_abilities').select('id, name_ko').eq('is_active', true).order('name_ko'),
-    client.from('reference_items').select('id, name_ko').eq('is_active', true).order('name_ko'),
+    listSpeciesOptionsForPublication(client, publicationId),
+    client.from('reference_natures')
+      .select('id, name_ko, increased_stat, decreased_stat')
+      .eq('publication_id', publicationId)
+      .eq('is_active', true)
+      .order('name_ko'),
+    client.from('reference_abilities')
+      .select('id, name_ko')
+      .eq('publication_id', publicationId)
+      .eq('is_active', true)
+      .order('name_ko'),
+    client.from('reference_items')
+      .select('id, name_ko')
+      .eq('publication_id', publicationId)
+      .eq('is_active', true)
+      .order('name_ko'),
   ])
   if (natures.error) throw natures.error
   if (abilities.error) throw abilities.error
   if (items.error) throw items.error
   return {
     species,
-    natures: natures.data.map((item) => ({ id: item.id, nameKo: item.name_ko })),
+    natures: natures.data.map((item) => ({
+      id: item.id,
+      nameKo: item.name_ko,
+      increasedStat: toNonHpStatKeyOrNull(item.increased_stat),
+      decreasedStat: toNonHpStatKeyOrNull(item.decreased_stat),
+    })),
     abilities: abilities.data.map((item) => ({ id: item.id, nameKo: item.name_ko })),
     items: items.data.map((item) => ({ id: item.id, nameKo: item.name_ko })),
   } satisfies OwnedPokemonEditOptions
@@ -512,6 +702,9 @@ export async function updateOwnedPokemonQuick(
     p_ev: input.ev,
     p_held_item_id: input.heldItemId as unknown as string,
     p_notes: input.notes,
+    p_apply_battle_options: true,
+    p_tera_type_id: input.teraTypeId as unknown as string,
+    p_has_gigantamax_factor: input.hasGigantamaxFactor,
   })
   if (error) throw error
 }
@@ -538,4 +731,65 @@ function parseStatBlock(value: Database['public']['Tables']['owned_pokemon']['Ro
   return Object.fromEntries(
     statKeys.map((key) => [key, Number(record[key] ?? 0)]),
   ) as StatBlock
+}
+
+function toBaseStatsOrNull(value: {
+  base_hp: number | null
+  base_attack: number | null
+  base_defense: number | null
+  base_special_attack: number | null
+  base_special_defense: number | null
+  base_speed: number | null
+}): StatBlock | null {
+  const baseStats = {
+    hp: value.base_hp,
+    attack: value.base_attack,
+    defense: value.base_defense,
+    special_attack: value.base_special_attack,
+    special_defense: value.base_special_defense,
+    speed: value.base_speed,
+  }
+  if (statKeys.some((key) => baseStats[key] === null)) return null
+  return baseStats as StatBlock
+}
+
+function toNonHpStatKeyOrNull(value: string | null): NonHpStatKey | null {
+  switch (value) {
+    case 'attack':
+    case 'defense':
+    case 'special_attack':
+    case 'special_defense':
+    case 'speed':
+      return value
+    default:
+      return null
+  }
+}
+
+function toOwnedMoveDetail(move: {
+  move_id: string
+  slot: number
+  target_condition_ko: string
+  reference_moves: {
+    name_ko: string
+    description_ko: string
+    damage_class: string
+    power: number | null
+    accuracy: number | null
+    pp: number | null
+    reference_types: { name_ko: string }
+  }
+}): OwnedMoveDetail {
+  return {
+    moveId: move.move_id,
+    slot: move.slot,
+    nameKo: move.reference_moves.name_ko,
+    descriptionKo: move.reference_moves.description_ko,
+    typeKo: move.reference_moves.reference_types.name_ko,
+    damageClassKo: damageClassLabelKo(move.reference_moves.damage_class),
+    power: move.reference_moves.power,
+    accuracy: move.reference_moves.accuracy,
+    pp: move.reference_moves.pp,
+    conditionKo: move.target_condition_ko || null,
+  }
 }

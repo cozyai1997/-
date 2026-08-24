@@ -3,10 +3,16 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   damageClassLabelKo,
+  correctOwnedPokemon,
+  createOwnedPokemon,
+  getOwnedPokemonDetail,
   groupAbilityOptions,
   groupMoveOptions,
   learnMethodLabelKo,
+  listOwnedPokemon,
+  listOwnedPokemonEditOptions,
   listPokemonFilteredOptions,
+  listSpeciesOptions,
   updateOwnedPokemonQuick,
 } from '@/features/owned-pokemon/repository'
 import { createRegistrationDraft } from '@/features/owned-pokemon/registration-state'
@@ -163,7 +169,12 @@ describe('필터 저장소 요청 순서', () => {
         error: null,
       },
       reference_forms: {
-        data: { id: 'exact', species_id: 'species', base_form_id: 'base' },
+        data: {
+          id: 'exact', species_id: 'species', base_form_id: 'base', is_battle_only: false,
+          base_hp: 55, base_attack: 55, base_defense: 50,
+          base_special_attack: 45, base_special_defense: 65, base_speed: 55,
+          reference_species: { identifier: 'eevee' },
+        },
         error: null,
       },
       reference_move_learnsets: {
@@ -197,6 +208,17 @@ describe('필터 저장소 요청 순서', () => {
         }],
         error: null,
       },
+      reference_form_tera_options: {
+        data: [{
+          tera_type_id: 'tera-water',
+          reference_tera_types: { id: 'tera-water', name_ko: '물', sort_order: 2, is_active: true },
+        }],
+        error: null,
+      },
+      reference_form_gigantamax_options: {
+        data: { source_form_id: 'exact' },
+        error: null,
+      },
     }
 
     function lazyQuery(table: string) {
@@ -208,6 +230,8 @@ describe('필터 저장소 요청 순서', () => {
         },
         maybeSingle() { return query },
         in() { return query },
+        order() { return query },
+        limit() { return query },
         then(
           onFulfilled: (value: unknown) => unknown,
           onRejected: (reason: unknown) => unknown,
@@ -259,7 +283,126 @@ describe('필터 저장소 요청 순서', () => {
     expect(result).toMatchObject({
       abilities: [{ id: 'ability', nameKo: '적응력' }],
       moves: [{ id: 'move', nameKo: '몸통박치기' }],
+      battle: {
+        baseStats: {
+          hp: 55,
+          attack: 55,
+          defense: 50,
+          special_attack: 45,
+          special_defense: 65,
+          speed: 55,
+        },
+        hpRule: 'standard',
+        teraTypes: [{ id: 'tera-water', nameKo: '물' }],
+        canGigantamax: true,
+      },
     })
+  })
+})
+
+function queryClient(payloads: Record<string, { data: unknown; error: unknown }>) {
+  function query(table: string) {
+    const result = payloads[table] ?? { data: [], error: null }
+    const builder = {
+      select() { return builder },
+      eq() { return builder },
+      in() { return builder },
+      order() { return builder },
+      range() { return builder },
+      limit() { return builder },
+      maybeSingle() { return builder },
+      then(onFulfilled: (value: unknown) => unknown, onRejected: (reason: unknown) => unknown) {
+        return Promise.resolve(result).then(onFulfilled, onRejected)
+      },
+    }
+    return builder
+  }
+
+  return { from: (table: string) => query(table) } as unknown as SupabaseClient<Database>
+}
+
+describe('전투 기준 저장소 계약', () => {
+  it('등록 선택지는 활성 게시본의 battle-only 모습을 제외한다', async () => {
+    const result = await listSpeciesOptions(queryClient({
+      data_publications: { data: { id: 'publication' }, error: null },
+      reference_species: {
+        data: [{
+          id: 'species', name_ko: '이브이', national_dex_number: 133,
+          reference_forms: [
+            { id: 'normal', name_ko: '기본 모습', is_default: true, is_battle_only: false },
+            { id: 'gmax', name_ko: '거다이맥스', is_default: false, is_battle_only: true },
+          ],
+        }],
+        error: null,
+      },
+    }))
+
+    expect(result).toEqual([{
+      id: 'species', nameKo: '이브이', nationalDexNumber: 133,
+      forms: [{ id: 'normal', nameKo: '기본 모습', isDefault: true }],
+    }])
+  })
+
+  it('목록과 과거 상세는 한국어 테라타입, 인자, 기술 전투 세부정보를 보존한다', async () => {
+    const client = queryClient({
+      owned_pokemon: {
+        data: [{
+          id: 'owned', species_id: 'species', form_id: 'legacy-battle-only', nickname: '밤', gender: 'female',
+          level: 50, captured_on: null, original_nature_id: null, effective_nature_id: null, ability_id: null,
+          original_iv: {}, effective_iv: {}, ev: {}, held_item_id: null, notes: '', created_at: '2026-08-24',
+          tera_type_id: 'tera-water', has_gigantamax_factor: true,
+          reference_species: { name_ko: '이브이', national_dex_number: 133, identifier: 'eevee' },
+          reference_forms: {
+            name_ko: '거다이맥스', base_hp: 55, base_attack: 55, base_defense: 50,
+            base_special_attack: 45, base_special_defense: 65, base_speed: 55,
+          },
+          tera_type: { name_ko: '물' }, original_nature: null, effective_nature: null,
+          ability: null, held_item: null,
+        }],
+        error: null,
+      },
+      reference_evolution_rules: { data: [], error: null },
+      owned_pokemon_moves: {
+        data: [{
+          move_id: 'move', kind: 'current', slot: 1, target_condition_ko: '',
+          reference_moves: {
+            name_ko: '몸통박치기', description_ko: '상대에게 부딪친다.', damage_class: 'physical',
+            power: 40, accuracy: 100, pp: 35, reference_types: { name_ko: '노말' },
+          },
+        }],
+        error: null,
+      },
+    })
+
+    await expect(listOwnedPokemon(client)).resolves.toEqual([expect.objectContaining({
+      teraTypeNameKo: '물', hasGigantamaxFactor: true,
+    })])
+    await expect(getOwnedPokemonDetail(client, 133, 1)).resolves.toEqual(expect.objectContaining({
+      teraTypeNameKo: '물',
+      hasGigantamaxFactor: true,
+      battle: expect.objectContaining({
+        baseStats: { hp: 55, attack: 55, defense: 50, special_attack: 45, special_defense: 65, speed: 55 },
+        hpRule: 'standard',
+      }),
+      currentMoveDetails: [{
+        moveId: 'move', slot: 1, nameKo: '몸통박치기', descriptionKo: '상대에게 부딪친다.',
+        typeKo: '노말', damageClassKo: '물리', power: 40, accuracy: 100, pp: 35, conditionKo: null,
+      }],
+    }))
+  })
+
+  it('편집 기준데이터는 성격 보정의 닫힌 능력치 키를 포함한다', async () => {
+    const options = await listOwnedPokemonEditOptions(queryClient({
+      data_publications: { data: { id: 'publication' }, error: null },
+      reference_species: { data: [], error: null },
+      reference_natures: { data: [{ id: 'jolly', name_ko: '명랑', increased_stat: 'speed', decreased_stat: 'special_attack' }], error: null },
+      reference_abilities: { data: [], error: null },
+      reference_items: { data: [], error: null },
+    }))
+
+    expect(options.natures).toEqual([{
+      id: 'jolly', nameKo: '명랑', increasedStat: 'speed', decreasedStat: 'special_attack',
+    }])
   })
 })
 
@@ -281,6 +424,36 @@ describe('빠른 수정 저장소 경계', () => {
     expect(rpc).toHaveBeenCalledWith('update_owned_pokemon_quick', expect.objectContaining({
       p_owned_pokemon_id: 'owned-pokemon',
       p_ability_id: 'ability',
+      p_apply_battle_options: true,
+      p_tera_type_id: null,
+      p_has_gigantamax_factor: false,
     }))
+  })
+
+  it('등록은 테라타입과 거다이맥스 인자를 하나의 RPC 인자로 보낸다', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: 'owned-pokemon', error: null })
+    const client = { rpc } as unknown as SupabaseClient<Database>
+    await createOwnedPokemon(client, {
+      ...createRegistrationDraft(), speciesId: 'species', formId: 'form', teraTypeId: 'tera-water',
+      hasGigantamaxFactor: true,
+    })
+
+    expect(rpc).toHaveBeenCalledWith('create_owned_pokemon_with_moves', expect.objectContaining({
+      p_tera_type_id: 'tera-water', p_has_gigantamax_factor: true,
+    }))
+  })
+
+  it('보호 정보 정정은 전투 인자를 덧붙이지 않고 서버의 기존 조정 서명을 유지한다', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: null })
+    const client = { rpc } as unknown as SupabaseClient<Database>
+    await correctOwnedPokemon(client, 'owned-pokemon', {
+      ...createRegistrationDraft(), speciesId: 'species', formId: 'form', teraTypeId: 'tera-water',
+      hasGigantamaxFactor: true,
+    }, '보호 정보 정정 사유')
+
+    expect(rpc).toHaveBeenCalledWith('correct_owned_pokemon', {
+      p_owned_pokemon_id: 'owned-pokemon', p_species_id: 'species', p_form_id: 'form',
+      p_captured_on: null, p_original_iv: expect.any(Object), p_reason_ko: '보호 정보 정정 사유',
+    })
   })
 })

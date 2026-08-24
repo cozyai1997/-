@@ -40,7 +40,16 @@ const statLabels = {
 const emptyEditOptions: OwnedPokemonEditOptions = {
   species: [], natures: [], abilities: [], items: [],
 }
-const emptyFilteredOptions: PokemonFilteredOptions = { abilities: [], moves: [] }
+const emptyFilteredOptions: PokemonFilteredOptions = {
+  abilities: [],
+  moves: [],
+  battle: {
+    baseStats: null,
+    hpRule: 'standard',
+    teraTypes: [],
+    canGigantamax: false,
+  },
+}
 const moveSlots = [0, 1, 2, 3] as const
 
 type FilterStatus = 'idle' | 'loading' | 'loaded' | 'error'

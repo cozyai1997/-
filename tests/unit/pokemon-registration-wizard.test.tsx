@@ -64,12 +64,19 @@ const editOptions: OwnedPokemonEditOptions = {
       forms: [{ id: 'form-electric', nameKo: '기본 모습', isDefault: true }],
     },
   ],
-  natures: [{ id: 'nature-jolly', nameKo: '명랑' }],
+  natures: [{ id: 'nature-jolly', nameKo: '명랑', increasedStat: 'speed', decreasedStat: 'special_attack' }],
   abilities: [
     { id: 'ability-water', nameKo: '저수' },
     { id: 'ability-electric', nameKo: '축전' },
   ],
   items: [{ id: 'item-water', nameKo: '신비의물방울' }],
+}
+
+const standardBattle = {
+  baseStats: { hp: 65, attack: 65, defense: 60, special_attack: 110, special_defense: 95, speed: 130 },
+  hpRule: 'standard' as const,
+  teraTypes: [{ id: 'tera-water', nameKo: '물' }],
+  canGigantamax: false,
 }
 
 const waterOptions: PokemonFilteredOptions = {
@@ -106,6 +113,7 @@ const waterOptions: PokemonFilteredOptions = {
       routes: [{ methodKo: '기술머신', conditionKo: '기술머신 135로 습득' }],
     },
   ],
+  battle: standardBattle,
 }
 
 const waveOptions: PokemonFilteredOptions = {
@@ -116,6 +124,7 @@ const waveOptions: PokemonFilteredOptions = {
     isHidden: false,
   }],
   moves: waterOptions.moves,
+  battle: standardBattle,
 }
 
 const electricOptions: PokemonFilteredOptions = {
@@ -136,6 +145,7 @@ const electricOptions: PokemonFilteredOptions = {
     pp: 15,
     routes: [{ methodKo: '기술머신', conditionKo: '기술머신 126으로 습득' }],
   }],
+  battle: standardBattle,
 }
 
 describe('포켓몬 등록 필터 선택 UI', () => {
@@ -230,7 +240,7 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     expect(screen.getAllByText(/물 · 특수 · 위력 90 · 명중 100 · PP 15/u)).toHaveLength(2)
 
     await waitFor(() => {
-      expect(JSON.parse(sessionStorage.getItem('pokemon-registration-draft-v2') ?? '{}'))
+      expect(JSON.parse(sessionStorage.getItem(registrationDraftKey) ?? '{}'))
         .toMatchObject({
           currentMoves: [
             { moveId: 'move-surf' },
@@ -259,6 +269,7 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     const retainedWaveOptions: PokemonFilteredOptions = {
       abilities: waterOptions.abilities,
       moves: waterOptions.moves,
+      battle: standardBattle,
     }
     sessionStorage.setItem(registrationDraftKey, JSON.stringify({
       ...createRegistrationDraft(),
