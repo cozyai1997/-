@@ -180,6 +180,91 @@ begin
       'condition_ko', '레벨 상승으로 습득'
     )
   from generate_series(0, 116518) as value;
+
+  insert into public.reference_option_filter_publication_staging (
+    batch_id, publication_id, row_kind, source_order, payload
+  )
+  select '${batchId}', '${ids.publication}', 'form_battle_profile', source_order,
+    jsonb_build_object(
+      'form_id', form_id,
+      'base_hp', 55, 'base_attack', 55, 'base_defense', 50,
+      'base_special_attack', 45, 'base_special_defense', 65, 'base_speed', 55,
+      'is_battle_only', source_order >= 1334
+    )
+  from (
+    select id as form_id, row_number() over (order by id) - 1 as source_order
+    from public.reference_forms
+    where publication_id = '${ids.publication}'
+  ) as staged_forms;
+
+  insert into public.reference_natures (publication_id, identifier, name_ko)
+  select '${ids.publication}', 'atomic-nature-' || value || '-${ids.publication}', '성격 ' || value
+  from generate_series(0, 24) as value
+  on conflict (identifier) do nothing;
+
+  insert into public.reference_option_filter_publication_staging (
+    batch_id, publication_id, row_kind, source_order, payload
+  )
+  select '${batchId}', '${ids.publication}', 'nature_adjustment', value,
+    jsonb_build_object(
+      'nature_id', nature_id,
+      'increased_stat', null,
+      'decreased_stat', null
+    )
+  from (
+    select id as nature_id, row_number() over (order by id) - 1 as value
+    from public.reference_natures
+    where publication_id = '${ids.publication}'
+  ) as staged_natures;
+
+  insert into public.reference_option_filter_publication_staging (
+    batch_id, publication_id, row_kind, source_order, payload
+  )
+  select '${batchId}', '${ids.publication}', 'tera_type', value,
+    jsonb_build_object(
+      'tera_type_id', gen_random_uuid(),
+      'identifier', 'atomic-tera-' || value || '-${ids.publication}',
+      'name_ko', '테라 ' || value,
+      'reference_type_id', case when value = 18 then null else '${ids.type}'::uuid end,
+      'sort_order', value,
+      'is_active', true
+    )
+  from generate_series(0, 18) as value;
+
+  insert into public.reference_option_filter_publication_staging (
+    batch_id, publication_id, row_kind, source_order, payload
+  )
+  select '${batchId}', '${ids.publication}', 'form_tera_option', value,
+    jsonb_build_object(
+      'form_id', form_id,
+      'tera_type_id', tera_type_id
+    )
+  from (
+    select forms.id as form_id, tera.payload ->> 'tera_type_id' as tera_type_id,
+      row_number() over (order by forms.id, tera.source_order) - 1 as value
+    from public.reference_forms as forms
+    cross join public.reference_option_filter_publication_staging as tera
+    where forms.publication_id = '${ids.publication}'
+      and tera.batch_id = '${batchId}'
+      and tera.row_kind = 'tera_type'
+    limit 25184
+  ) as staged_options;
+
+  insert into public.reference_option_filter_publication_staging (
+    batch_id, publication_id, row_kind, source_order, payload
+  )
+  select '${batchId}', '${ids.publication}', 'form_gigantamax_option', value,
+    jsonb_build_object(
+      'source_form_id', source_form_id,
+      'gigantamax_form_id', form_id
+    )
+  from (
+    select target.id as form_id, source.id as source_form_id,
+      row_number() over (order by target.id desc) - 1 as value
+    from (select id from public.reference_forms where publication_id = '${ids.publication}' order by id limit 1) as source
+    cross join (select id from public.reference_forms where publication_id = '${ids.publication}' order by id desc limit 42) as target
+    limit 42
+  ) as staged_gmax;
 end
 $stage$;`
 }
@@ -235,6 +320,22 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
       .eq('publication_id', ids.publication)).error)
     collect('기술 습득 삭제', (await admin
       .from('reference_move_learnsets')
+      .delete()
+      .eq('publication_id', ids.publication)).error)
+    collect('거다이맥스 관계 삭제', (await admin
+      .from('reference_form_gigantamax_options')
+      .delete()
+      .eq('publication_id', ids.publication)).error)
+    collect('테라 타입 관계 삭제', (await admin
+      .from('reference_form_tera_options')
+      .delete()
+      .eq('publication_id', ids.publication)).error)
+    collect('테라 타입 삭제', (await admin
+      .from('reference_tera_types')
+      .delete()
+      .eq('publication_id', ids.publication)).error)
+    collect('성격 삭제', (await admin
+      .from('reference_natures')
       .delete()
       .eq('publication_id', ids.publication)).error)
     collect('기술 삭제', (await admin
@@ -295,7 +396,7 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
     expect(cleanup.error).toBeNull()
   }, 60_000)
 
-  it('같은 active publication을 두 번 완전히 교체하고 네 종류 staging을 모두 지운다', async () => {
+  it('같은 active publication을 두 번 완전히 교체하고 아홉 종류 staging을 모두 지운다', async () => {
     for (const batchId of [ids.firstSuccessfulBatch, ids.secondSuccessfulBatch]) {
       runLocalSql(stagedRowsSql(batchId, false))
       const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
@@ -305,10 +406,16 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
       expect(replacement.error).toBeNull()
     }
 
-    const [moveCount, formAbilityCount, learnsetCount, move, form, stagingResidue] = await Promise.all([
+    const [moveCount, formAbilityCount, learnsetCount, battleProfileCount, battleOnlyCount, natureCount, teraTypeCount, teraOptionCount, gmaxCount, move, form, stagingResidue] = await Promise.all([
       admin.from('reference_moves').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
       admin.from('reference_form_abilities').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
       admin.from('reference_move_learnsets').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_forms').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication).not('base_hp', 'is', null),
+      admin.from('reference_forms').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication).eq('is_battle_only', true),
+      admin.from('reference_natures').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_tera_types').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_form_tera_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
+      admin.from('reference_form_gigantamax_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
       admin.from('reference_moves').select('name_ko').eq('id', ids.move).single(),
       admin.from('reference_forms').select('base_form_id').eq('id', ids.form).single(),
       admin.from('reference_option_filter_publication_staging').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
@@ -316,6 +423,12 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
     expect(moveCount.count).toBe(826)
     expect(formAbilityCount.count).toBe(3_055)
     expect(learnsetCount.count).toBe(116_519)
+    expect(battleProfileCount.count).toBe(1_498)
+    expect(battleOnlyCount.count).toBe(164)
+    expect(natureCount.count).toBe(25)
+    expect(teraTypeCount.count).toBe(19)
+    expect(teraOptionCount.count).toBe(25_184)
+    expect(gmaxCount.count).toBe(42)
     expect(move.data).toEqual({ name_ko: '새 기술 0' })
     expect(form.data).toEqual({ base_form_id: ids.baseForm })
     expect(stagingResidue.count).toBe(0)

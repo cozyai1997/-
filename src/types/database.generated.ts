@@ -121,6 +121,7 @@ export type Database = {
           ev: Json
           form_id: string
           gender: Database["public"]["Enums"]["pokemon_gender"]
+          has_gigantamax_factor: boolean
           held_item_id: string | null
           id: string
           level: number
@@ -129,6 +130,7 @@ export type Database = {
           original_iv: Json
           original_nature_id: string | null
           species_id: string
+          tera_type_id: string | null
           updated_at: string
           user_id: string
         }
@@ -141,6 +143,7 @@ export type Database = {
           ev?: Json
           form_id: string
           gender: Database["public"]["Enums"]["pokemon_gender"]
+          has_gigantamax_factor?: boolean
           held_item_id?: string | null
           id?: string
           level: number
@@ -149,6 +152,7 @@ export type Database = {
           original_iv?: Json
           original_nature_id?: string | null
           species_id: string
+          tera_type_id?: string | null
           updated_at?: string
           user_id: string
         }
@@ -161,6 +165,7 @@ export type Database = {
           ev?: Json
           form_id?: string
           gender?: Database["public"]["Enums"]["pokemon_gender"]
+          has_gigantamax_factor?: boolean
           held_item_id?: string | null
           id?: string
           level?: number
@@ -169,6 +174,7 @@ export type Database = {
           original_iv?: Json
           original_nature_id?: string | null
           species_id?: string
+          tera_type_id?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -213,6 +219,13 @@ export type Database = {
             columns: ["species_id"]
             isOneToOne: false
             referencedRelation: "reference_species"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "owned_pokemon_tera_type_id_fkey"
+            columns: ["tera_type_id"]
+            isOneToOne: false
+            referencedRelation: "reference_tera_types"
             referencedColumns: ["id"]
           },
         ]
@@ -439,12 +452,99 @@ export type Database = {
           },
         ]
       }
+      reference_form_gigantamax_options: {
+        Row: {
+          gigantamax_form_id: string
+          publication_id: string
+          source_form_id: string
+        }
+        Insert: {
+          gigantamax_form_id: string
+          publication_id: string
+          source_form_id: string
+        }
+        Update: {
+          gigantamax_form_id?: string
+          publication_id?: string
+          source_form_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reference_form_gigantamax_opt_publication_id_gigantamax_fo_fkey"
+            columns: ["publication_id", "gigantamax_form_id"]
+            isOneToOne: false
+            referencedRelation: "reference_forms"
+            referencedColumns: ["publication_id", "id"]
+          },
+          {
+            foreignKeyName: "reference_form_gigantamax_opt_publication_id_source_form_i_fkey"
+            columns: ["publication_id", "source_form_id"]
+            isOneToOne: false
+            referencedRelation: "reference_forms"
+            referencedColumns: ["publication_id", "id"]
+          },
+          {
+            foreignKeyName: "reference_form_gigantamax_options_publication_id_fkey"
+            columns: ["publication_id"]
+            isOneToOne: false
+            referencedRelation: "data_publications"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      reference_form_tera_options: {
+        Row: {
+          form_id: string
+          publication_id: string
+          tera_type_id: string
+        }
+        Insert: {
+          form_id: string
+          publication_id: string
+          tera_type_id: string
+        }
+        Update: {
+          form_id?: string
+          publication_id?: string
+          tera_type_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reference_form_tera_options_publication_id_fkey"
+            columns: ["publication_id"]
+            isOneToOne: false
+            referencedRelation: "data_publications"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reference_form_tera_options_publication_id_form_id_fkey"
+            columns: ["publication_id", "form_id"]
+            isOneToOne: false
+            referencedRelation: "reference_forms"
+            referencedColumns: ["publication_id", "id"]
+          },
+          {
+            foreignKeyName: "reference_form_tera_options_publication_id_tera_type_id_fkey"
+            columns: ["publication_id", "tera_type_id"]
+            isOneToOne: false
+            referencedRelation: "reference_tera_types"
+            referencedColumns: ["publication_id", "id"]
+          },
+        ]
+      }
       reference_forms: {
         Row: {
+          base_attack: number | null
+          base_defense: number | null
           base_form_id: string | null
+          base_hp: number | null
+          base_special_attack: number | null
+          base_special_defense: number | null
+          base_speed: number | null
           id: string
           identifier: string
           is_active: boolean
+          is_battle_only: boolean
           is_default: boolean
           name_ko: string
           primary_type_id: string | null
@@ -453,10 +553,17 @@ export type Database = {
           species_id: string
         }
         Insert: {
+          base_attack?: number | null
+          base_defense?: number | null
           base_form_id?: string | null
+          base_hp?: number | null
+          base_special_attack?: number | null
+          base_special_defense?: number | null
+          base_speed?: number | null
           id?: string
           identifier: string
           is_active?: boolean
+          is_battle_only?: boolean
           is_default?: boolean
           name_ko: string
           primary_type_id?: string | null
@@ -465,10 +572,17 @@ export type Database = {
           species_id: string
         }
         Update: {
+          base_attack?: number | null
+          base_defense?: number | null
           base_form_id?: string | null
+          base_hp?: number | null
+          base_special_attack?: number | null
+          base_special_defense?: number | null
+          base_speed?: number | null
           id?: string
           identifier?: string
           is_active?: boolean
+          is_battle_only?: boolean
           is_default?: boolean
           name_ko?: string
           primary_type_id?: string | null
@@ -802,6 +916,51 @@ export type Database = {
           },
         ]
       }
+      reference_tera_types: {
+        Row: {
+          id: string
+          identifier: string
+          is_active: boolean
+          name_ko: string
+          publication_id: string
+          reference_type_id: string | null
+          sort_order: number
+        }
+        Insert: {
+          id?: string
+          identifier: string
+          is_active?: boolean
+          name_ko: string
+          publication_id: string
+          reference_type_id?: string | null
+          sort_order: number
+        }
+        Update: {
+          id?: string
+          identifier?: string
+          is_active?: boolean
+          name_ko?: string
+          publication_id?: string
+          reference_type_id?: string | null
+          sort_order?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reference_tera_types_publication_id_fkey"
+            columns: ["publication_id"]
+            isOneToOne: false
+            referencedRelation: "data_publications"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reference_tera_types_publication_id_reference_type_id_fkey"
+            columns: ["publication_id", "reference_type_id"]
+            isOneToOne: false
+            referencedRelation: "reference_types"
+            referencedColumns: ["publication_id", "id"]
+          },
+        ]
+      }
       reference_type_matchups: {
         Row: {
           attacking_type_id: string
@@ -906,6 +1065,7 @@ export type Database = {
           ev: Json
           form_id: string
           gender: Database["public"]["Enums"]["pokemon_gender"]
+          has_gigantamax_factor: boolean
           held_item_id: string | null
           id: string
           level: number
@@ -914,6 +1074,7 @@ export type Database = {
           original_iv: Json
           original_nature_id: string | null
           species_id: string
+          tera_type_id: string | null
           updated_at: string
           user_id: string
         }
@@ -934,6 +1095,7 @@ export type Database = {
           p_ev: Json
           p_form_id: string
           p_gender: Database["public"]["Enums"]["pokemon_gender"]
+          p_has_gigantamax_factor?: boolean
           p_held_item_id: string
           p_level: number
           p_nickname: string
@@ -942,6 +1104,7 @@ export type Database = {
           p_original_nature_id: string
           p_species_id: string
           p_target_moves: Json
+          p_tera_type_id?: string
         }
         Returns: string
       }
@@ -949,18 +1112,25 @@ export type Database = {
         Args: { p_batch_id: string; p_publication_id: string }
         Returns: undefined
       }
+      stat_block_greater_than_or_equal: {
+        Args: { left_block: Json; right_block: Json }
+        Returns: boolean
+      }
       update_owned_pokemon_quick: {
         Args: {
           p_ability_id: string
+          p_apply_battle_options?: boolean
           p_effective_iv: Json
           p_effective_nature_id: string
           p_ev: Json
           p_gender: Database["public"]["Enums"]["pokemon_gender"]
+          p_has_gigantamax_factor?: boolean
           p_held_item_id: string
           p_level: number
           p_nickname: string
           p_notes: string
           p_owned_pokemon_id: string
+          p_tera_type_id?: string
         }
         Returns: {
           ability_id: string | null
@@ -971,6 +1141,7 @@ export type Database = {
           ev: Json
           form_id: string
           gender: Database["public"]["Enums"]["pokemon_gender"]
+          has_gigantamax_factor: boolean
           held_item_id: string | null
           id: string
           level: number
@@ -979,6 +1150,7 @@ export type Database = {
           original_iv: Json
           original_nature_id: string | null
           species_id: string
+          tera_type_id: string | null
           updated_at: string
           user_id: string
         }
@@ -988,10 +1160,6 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
-      }
-      stat_block_greater_than_or_equal: {
-        Args: { left_block: Json; right_block: Json }
-        Returns: boolean
       }
       valid_stat_block: {
         Args: { block: Json; per_stat_max: number; total_max: number }

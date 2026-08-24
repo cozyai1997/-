@@ -26,6 +26,12 @@ let bob: TestIdentity
 let speciesId: string
 let formId: string
 let pokemonId: string
+let anonymous: SupabaseClient
+let previousActivePublicationId: string | null = null
+const referencePublicationId = randomUUID()
+const retiredReferencePublicationId = randomUUID()
+const activeTeraTypeId = randomUUID()
+const retiredTeraTypeId = randomUUID()
 
 function readLocalSupabaseEnvironment(): LocalSupabaseEnvironment {
   const cliPath = resolve(process.cwd(), 'node_modules/supabase/dist/supabase.js')
@@ -93,13 +99,33 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
     admin = createClient(environment.API_URL, environment.SERVICE_ROLE_KEY, {
       auth: { autoRefreshToken: false, persistSession: false },
     })
+    anonymous = createClient(environment.API_URL, environment.ANON_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
     alice = await createIdentity(environment, 'alice')
     bob = await createIdentity(environment, 'bob')
+
+    const previousActive = await admin.from('data_publications').select('id').eq('status', 'active').maybeSingle()
+    expect(previousActive.error).toBeNull()
+    previousActivePublicationId = previousActive.data?.id ?? null
+    if (previousActivePublicationId) {
+      expect((await admin.from('data_publications').update({ status: 'retired' })
+        .eq('id', previousActivePublicationId)).error).toBeNull()
+    }
+    expect((await admin.from('data_publications').insert([
+      { id: referencePublicationId, version: `rls-active-${referencePublicationId}`, status: 'active', validated_at: new Date().toISOString(), activated_at: new Date().toISOString() },
+      { id: retiredReferencePublicationId, version: `rls-retired-${retiredReferencePublicationId}`, status: 'retired' },
+    ])).error).toBeNull()
+    expect((await admin.from('reference_tera_types').insert([
+      { id: activeTeraTypeId, publication_id: referencePublicationId, identifier: `rls-active-tera-${activeTeraTypeId}`, name_ko: '노말', sort_order: 0 },
+      { id: retiredTeraTypeId, publication_id: retiredReferencePublicationId, identifier: `rls-retired-tera-${retiredTeraTypeId}`, name_ko: '스텔라', sort_order: 0 },
+    ])).error).toBeNull()
 
     speciesId = randomUUID()
     formId = randomUUID()
     const referenceData = await admin.from('reference_species').insert({
       id: speciesId,
+      publication_id: referencePublicationId,
       national_dex_number: 9001,
       identifier: `eevee-${speciesId}`,
       name_ko: '이브이',
@@ -109,10 +135,12 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
 
     const formData = await admin.from('reference_forms').insert({
       id: formId,
+      publication_id: referencePublicationId,
       species_id: speciesId,
       identifier: `eevee-normal-${formId}`,
       name_ko: '이브이',
       is_default: true,
+      is_battle_only: false,
     })
     expect(formData.error).toBeNull()
 
@@ -131,6 +159,11 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
 
   afterAll(async () => {
     if (admin) {
+      await admin.from('reference_tera_types').delete().in('publication_id', [referencePublicationId, retiredReferencePublicationId])
+      await admin.from('data_publications').delete().in('id', [referencePublicationId, retiredReferencePublicationId])
+      if (previousActivePublicationId) {
+        await admin.from('data_publications').update({ status: 'active' }).eq('id', previousActivePublicationId)
+      }
       for (const id of identities) {
         const deleted = await admin.auth.admin.deleteUser(id)
         expect(deleted.error).toBeNull()
@@ -234,6 +267,23 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
     expect(selected.error).toBeNull()
     expect(selected.data).toEqual({ national_dex_number: 9001, name_ko: '이브이' })
     expect(inserted.error?.code).toBe('42501')
+  })
+
+  it('전투 기준값은 활성 게시본만 인증 사용자에게 읽히며 anon과 일반 쓰기는 거부된다', async () => {
+    const visible = await bob.client.from('reference_tera_types')
+      .select('id,name_ko').in('id', [activeTeraTypeId, retiredTeraTypeId]).order('id')
+    const anonymousRead = await anonymous.from('reference_tera_types').select('id').eq('id', activeTeraTypeId)
+    const userWrite = await bob.client.from('reference_tera_types').insert({
+      publication_id: referencePublicationId,
+      identifier: `rls-forbidden-${randomUUID()}`,
+      name_ko: '금지',
+      sort_order: 99,
+    })
+
+    expect(visible.error).toBeNull()
+    expect(visible.data).toEqual([{ id: activeTeraTypeId, name_ko: '노말' }])
+    expect(anonymousRead.error).not.toBeNull()
+    expect(userWrite.error?.code).toBe('42501')
   })
 
   it('보유 포켓몬이 있어도 계정을 삭제하고 감사 기록은 보존한다', async () => {
