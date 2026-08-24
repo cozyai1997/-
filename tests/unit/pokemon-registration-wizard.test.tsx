@@ -237,7 +237,7 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     await user.selectOptions(screen.getByLabelText('목표 기술 2'), 'move-ice-beam')
     const route = screen.getByLabelText('목표 습득 방법 1')
     await user.selectOptions(route, '기술머신 123으로 습득')
-    expect(screen.getAllByText(/물 · 특수 · 위력 90 · 명중 100 · PP 15/u)).toHaveLength(2)
+    expect(screen.getAllByText('기본 PP: 15')).toHaveLength(2)
 
     await waitFor(() => {
       expect(JSON.parse(sessionStorage.getItem(registrationDraftKey) ?? '{}'))
