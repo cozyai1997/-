@@ -6,8 +6,25 @@ import {
   normalizeLearnsetRow,
   normalizeMoveRow,
 } from '../../scripts/data/import-reference-data'
+import {
+  productionExpectedBattleDatasetProfile,
+  productionExpectedBattleRowCounts,
+} from '../../src/features/localization/reference-data-validation'
 
 describe('포켓몬 선택 필터 기준 데이터', () => {
+  it('원천 battle-only 기준에 맞는 운영 전투 행 수를 고정한다', () => {
+    expect(productionExpectedBattleRowCounts).toEqual({
+      teraTypes: 19,
+      formTeraOptions: 25_184,
+      formGigantamaxOptions: 42,
+    })
+    expect(productionExpectedBattleDatasetProfile).toEqual({
+      playableForms: 1_334,
+      battleOnlyForms: 164,
+      battleOnlyDiagnostics: 9,
+    })
+  })
+
   it('원본 폼, 기술, 습득과 특성 관계의 필터 필드를 그대로 보존한다', () => {
     expect(normalizeFormRow({
       FormID: 'venusaur-gmax', SpeciesID: 'venusaur', BaseFormID: 'venusaur-normal',

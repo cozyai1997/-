@@ -21,6 +21,25 @@ type FormRow = IdentifierRow & {
   is_active: boolean
 }
 
+export type BattleStagingKind =
+  | 'form_battle_profile'
+  | 'nature_adjustment'
+  | 'tera_type'
+  | 'form_tera_option'
+  | 'form_gigantamax_option'
+
+type BattlePublicationIds = {
+  formIds: Map<string, string>
+  natureIds: Map<string, string>
+  teraTypeIds: Map<string, string>
+  typeIds: Map<string, string>
+}
+
+export type BattlePublicationRow = {
+  rowKind: BattleStagingKind
+  payload: Record<string, string | number | boolean | null>
+}
+
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name)
   return index >= 0 ? process.argv[index + 1] : undefined
@@ -99,7 +118,15 @@ export async function stageThenReplacePublicationRows<T>(
 export function assertOptionFilterPublicationCounts(
   dataset: Pick<
     ReferenceDataset,
-    'moves' | 'forms' | 'formAbilities' | 'learnsets' | 'reportedCounts'
+    | 'moves'
+    | 'forms'
+    | 'formAbilities'
+    | 'learnsets'
+    | 'natures'
+    | 'teraTypes'
+    | 'formTeraOptions'
+    | 'formGigantamaxOptions'
+    | 'reportedCounts'
   >,
 ): void {
   const expected = {
@@ -107,6 +134,10 @@ export function assertOptionFilterPublicationCounts(
     forms: 1498,
     formAbilities: 3055,
     learnsets: 116519,
+    natures: 25,
+    teraTypes: 19,
+    formTeraOptions: 25_184,
+    formGigantamaxOptions: 42,
   } as const
   for (const [key, count] of Object.entries(expected) as Array<[keyof typeof expected, number]>) {
     const actual = dataset[key].length
@@ -143,9 +174,11 @@ export function assertOptionFilterCandidate(dataset: ReferenceDataset): void {
 
   const typeIds = assertUniqueIdentifiers('types', dataset.types)
   const speciesIds = assertUniqueIdentifiers('species', dataset.species)
-  assertUniqueIdentifiers('forms', dataset.forms)
+  const formIds = assertUniqueIdentifiers('forms', dataset.forms)
   const abilityIds = assertUniqueIdentifiers('abilities', dataset.abilities)
   const moveIds = assertUniqueIdentifiers('moves', dataset.moves)
+  assertUniqueIdentifiers('natures', dataset.natures)
+  const teraTypeIds = assertUniqueIdentifiers('teraTypes', dataset.teraTypes)
   const formsById = new Map(dataset.forms.map((row) => [row.id, row]))
 
   for (const species of dataset.species) {
@@ -193,6 +226,78 @@ export function assertOptionFilterCandidate(dataset: ReferenceDataset): void {
       }
     }
   })
+  for (const option of dataset.formTeraOptions) {
+    assertResolvedIdentifier(formIds, option.formId, `formTeraOptions:${option.formId}:formId`)
+    assertResolvedIdentifier(teraTypeIds, option.teraTypeId, `formTeraOptions:${option.formId}:teraTypeId`)
+  }
+  for (const option of dataset.formGigantamaxOptions) {
+    const source = formsById.get(option.sourceFormId)
+    const target = formsById.get(option.gigantamaxFormId)
+    if (!source || !target || source.speciesId !== target.speciesId || source.isBattleOnly || !target.isBattleOnly) {
+      throw new Error(`formGigantamaxOptions:${option.sourceFormId}:${option.gigantamaxFormId}`)
+    }
+  }
+}
+
+export function prepareBattlePublicationRows(
+  dataset: Pick<
+    ReferenceDataset,
+    'forms' | 'natures' | 'teraTypes' | 'formTeraOptions' | 'formGigantamaxOptions'
+  >,
+  ids: BattlePublicationIds,
+): BattlePublicationRow[] {
+  return [
+    ...dataset.forms.map((form) => ({
+      rowKind: 'form_battle_profile' as const,
+      payload: {
+        form_id: requireIdentifierId(ids.formIds, form.id, 'reference_forms'),
+        base_form_id: form.baseFormId
+          ? requireIdentifierId(ids.formIds, form.baseFormId, 'reference_forms')
+          : null,
+        base_hp: form.baseStats.hp,
+        base_attack: form.baseStats.attack,
+        base_defense: form.baseStats.defense,
+        base_special_attack: form.baseStats.special_attack,
+        base_special_defense: form.baseStats.special_defense,
+        base_speed: form.baseStats.speed,
+        is_battle_only: form.isBattleOnly,
+      },
+    })),
+    ...dataset.natures.map((nature) => ({
+      rowKind: 'nature_adjustment' as const,
+      payload: {
+        nature_id: requireIdentifierId(ids.natureIds, nature.id, 'reference_natures'),
+        increased_stat: nature.increasedStat,
+        decreased_stat: nature.decreasedStat,
+      },
+    })),
+    ...dataset.teraTypes.map((teraType) => ({
+      rowKind: 'tera_type' as const,
+      payload: {
+        tera_type_id: requireIdentifierId(ids.teraTypeIds, teraType.id, 'reference_tera_types'),
+        identifier: teraType.id,
+        name_ko: teraType.nameKo,
+        reference_type_id: teraType.referenceTypeId
+          ? requireIdentifierId(ids.typeIds, teraType.referenceTypeId, 'reference_types')
+          : null,
+        sort_order: teraType.sortOrder,
+      },
+    })),
+    ...dataset.formTeraOptions.map((option) => ({
+      rowKind: 'form_tera_option' as const,
+      payload: {
+        form_id: requireIdentifierId(ids.formIds, option.formId, 'reference_forms'),
+        tera_type_id: requireIdentifierId(ids.teraTypeIds, option.teraTypeId, 'reference_tera_types'),
+      },
+    })),
+    ...dataset.formGigantamaxOptions.map((option) => ({
+      rowKind: 'form_gigantamax_option' as const,
+      payload: {
+        source_form_id: requireIdentifierId(ids.formIds, option.sourceFormId, 'reference_forms'),
+        gigantamax_form_id: requireIdentifierId(ids.formIds, option.gigantamaxFormId, 'reference_forms'),
+      },
+    })),
+  ]
 }
 
 export function assertKoreanOptionDisplayValues(
@@ -219,7 +324,16 @@ export function assertKoreanOptionDisplayValues(
 export async function publishPokemonOptionFilterReferenceData(
   dataset: ReferenceDataset,
   client: SupabaseClient,
-): Promise<{ moves: number; forms: number; formAbilities: number; learnsets: number }> {
+): Promise<{
+  moves: number
+  forms: number
+  formAbilities: number
+  learnsets: number
+  natures: number
+  teraTypes: number
+  formTeraOptions: number
+  formGigantamaxOptions: number
+}> {
   assertOptionFilterCandidate(dataset)
 
   const { data: publication, error: publicationError } = await client
@@ -232,7 +346,7 @@ export async function publishPokemonOptionFilterReferenceData(
   if (!publication) throw new Error(`핵심 기준데이터 게시본이 없습니다: ${dataset.version}`)
 
   const publicationId = publication.id as string
-  const [types, species, forms, abilities] = await Promise.all([
+  const [types, species, forms, abilities, natures] = await Promise.all([
     selectAll<IdentifierRow>(client, 'reference_types', 'id,identifier', publicationId),
     selectAll<IdentifierRow>(client, 'reference_species', 'id,identifier', publicationId),
     selectAll<FormRow>(
@@ -242,12 +356,14 @@ export async function publishPokemonOptionFilterReferenceData(
       publicationId,
     ),
     selectAll<IdentifierRow>(client, 'reference_abilities', 'id,identifier', publicationId),
+    selectAll<IdentifierRow>(client, 'reference_natures', 'id,identifier', publicationId),
   ])
 
   const typeIds = new Map(types.map((row) => [row.identifier, row.id]))
   const speciesIds = new Map(species.map((row) => [row.identifier, row.id]))
   const formIds = new Map(forms.map((row) => [row.identifier, row.id]))
   const abilityIds = new Map(abilities.map((row) => [row.identifier, row.id]))
+  const natureIds = new Map(natures.map((row) => [row.identifier, row.id]))
   const databaseForms = new Map(forms.map((row) => [row.identifier, row]))
 
   const formBaseLinks = dataset.forms.map((source) => {
@@ -287,6 +403,13 @@ export async function publishPokemonOptionFilterReferenceData(
     pp: row.pp,
     is_active: true,
   }))
+  const teraTypeIds = new Map(dataset.teraTypes.map((row) => [row.id, randomUUID()]))
+  const battleRows = prepareBattlePublicationRows(dataset, {
+    formIds,
+    natureIds,
+    teraTypeIds,
+    typeIds,
+  })
   const batchId = randomUUID()
   const stagedRows = [
     ...moves.map((row, sourceOrder) => ({
@@ -317,6 +440,13 @@ export async function publishPokemonOptionFilterReferenceData(
       source_order: sourceOrder,
       payload: row,
     })),
+    ...battleRows.map((row, sourceOrder) => ({
+      batch_id: batchId,
+      publication_id: publicationId,
+      row_kind: row.rowKind,
+      source_order: sourceOrder,
+      payload: row.payload,
+    })),
   ]
   const cleanupStagedAttempt = async () => {
     const { error } = await client
@@ -345,6 +475,10 @@ export async function publishPokemonOptionFilterReferenceData(
     forms: formBaseLinks.length,
     formAbilities: formAbilities.length,
     learnsets: learnsets.length,
+    natures: dataset.natures.length,
+    teraTypes: dataset.teraTypes.length,
+    formTeraOptions: dataset.formTeraOptions.length,
+    formGigantamaxOptions: dataset.formGigantamaxOptions.length,
   }
 }
 

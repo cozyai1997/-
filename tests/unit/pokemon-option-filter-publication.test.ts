@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   assertKoreanOptionDisplayValues,
   assertOptionFilterPublicationCounts,
+  prepareBattlePublicationRows,
   publishPokemonOptionFilterReferenceData,
   stageThenReplacePublicationRows,
 } from '../../scripts/data/publish-pokemon-option-filter-reference-data'
@@ -17,7 +18,7 @@ function countCorrectCandidate(): ReferenceDataset {
     primaryTypeId: 'normal',
     secondaryTypeId: null,
     baseStats: { hp: 50, attack: 50, defense: 50, special_attack: 50, special_defense: 50, speed: 50 },
-    isBattleOnly: false,
+    isBattleOnly: index >= 1_334,
     aspects: [],
   }))
   const moves = Array.from({ length: 826 }, (_, index) => ({
@@ -46,11 +47,11 @@ function countCorrectCandidate(): ReferenceDataset {
       items: 0,
       evolutions: 0,
       formAbilities: 3_055,
-      natures: 0,
+      natures: 25,
       typeMatchups: 0,
-      teraTypes: 0,
-      formTeraOptions: 0,
-      formGigantamaxOptions: 0,
+      teraTypes: 19,
+      formTeraOptions: 25_184,
+      formGigantamaxOptions: 42,
     },
     types: [{ id: 'normal', nameKo: '노말' }],
     species: [{
@@ -83,10 +84,23 @@ function countCorrectCandidate(): ReferenceDataset {
       slot: 'first',
       isHidden: false,
     })),
-    natures: [],
-    teraTypes: [],
-    formTeraOptions: [],
-    formGigantamaxOptions: [],
+    natures: Array.from({ length: 25 }, (_, index) => ({
+      id: `nature-${index}`, nameKo: `성격가-${index}`, increasedStat: null, decreasedStat: null,
+    })),
+    teraTypes: Array.from({ length: 19 }, (_, index) => ({
+      id: `tera-${index}`, nameKo: `테라가-${index}`, referenceTypeId: null, sortOrder: index,
+    })),
+    formTeraOptions: [
+      ...Array.from({ length: 1_325 }, (_, formIndex) => Array.from({ length: 19 }, (_, teraIndex) => ({
+        formId: `form-${formIndex}`, teraTypeId: `tera-${teraIndex}`,
+      }))).flat(),
+      ...Array.from({ length: 9 }, (_, index) => ({
+        formId: `form-${1_325 + index}`, teraTypeId: 'tera-0',
+      })),
+    ],
+    formGigantamaxOptions: Array.from({ length: 42 }, (_, index) => ({
+      sourceFormId: `form-${index}`, gigantamaxFormId: `form-${1_334 + index}`,
+    })),
     typeMatchups: [],
   }
 }
@@ -94,6 +108,63 @@ function countCorrectCandidate(): ReferenceDataset {
 const validCandidate = countCorrectCandidate()
 
 describe('포켓몬 선택 필터 게시', () => {
+  it('전투 게시 행은 내부 UUID를 연결하고 화면용 이름은 한국어만 유지한다', () => {
+    const dataset = {
+      ...countCorrectCandidate(),
+      forms: [{
+        id: 'form-a', speciesId: 'species-a', baseFormId: null, nameKo: '일반',
+        primaryTypeId: 'normal', secondaryTypeId: null,
+        baseStats: { hp: 50, attack: 51, defense: 52, special_attack: 53, special_defense: 54, speed: 55 },
+        isBattleOnly: false, aspects: [],
+      }],
+      natures: [{ id: 'hardy', nameKo: '노력', increasedStat: null, decreasedStat: null }],
+      teraTypes: [{ id: 'normal', nameKo: '노말', referenceTypeId: 'normal', sortOrder: 0 }],
+      formTeraOptions: [{ formId: 'form-a', teraTypeId: 'normal' }],
+      formGigantamaxOptions: [],
+    } as ReferenceDataset
+
+    const rows = prepareBattlePublicationRows(dataset, {
+      formIds: new Map([['form-a', '00000000-0000-4000-8000-000000000001']]),
+      natureIds: new Map([['hardy', '00000000-0000-4000-8000-000000000002']]),
+      teraTypeIds: new Map([['normal', '00000000-0000-4000-8000-000000000003']]),
+      typeIds: new Map([['normal', '00000000-0000-4000-8000-000000000004']]),
+    })
+
+    expect(rows).toEqual([
+      {
+        rowKind: 'form_battle_profile',
+        payload: {
+          form_id: '00000000-0000-4000-8000-000000000001', base_form_id: null,
+          base_hp: 50, base_attack: 51, base_defense: 52, base_special_attack: 53,
+          base_special_defense: 54, base_speed: 55, is_battle_only: false,
+        },
+      },
+      {
+        rowKind: 'nature_adjustment',
+        payload: {
+          nature_id: '00000000-0000-4000-8000-000000000002',
+          increased_stat: null, decreased_stat: null,
+        },
+      },
+      {
+        rowKind: 'tera_type',
+        payload: {
+          tera_type_id: '00000000-0000-4000-8000-000000000003', identifier: 'normal', name_ko: '노말',
+          reference_type_id: '00000000-0000-4000-8000-000000000004', sort_order: 0,
+        },
+      },
+      {
+        rowKind: 'form_tera_option',
+        payload: {
+          form_id: '00000000-0000-4000-8000-000000000001',
+          tera_type_id: '00000000-0000-4000-8000-000000000003',
+        },
+      },
+    ])
+    expect(JSON.stringify(rows)).not.toContain('form-a')
+    expect(rows.find((row) => row.rowKind === 'tera_type')?.payload.name_ko).toBe('노말')
+  })
+
   it('한국어 기술 또는 특성 표시값이 비어 있으면 쓰기 전에 거부한다', () => {
     expect(() => assertKoreanOptionDisplayValues({
       abilities: [{ id: 'adaptability', nameKo: '적응력', descriptionKo: '   ' }],
@@ -133,8 +204,27 @@ describe('포켓몬 선택 필터 게시', () => {
         forms: key === 'forms' ? reported : 1498,
         formAbilities: key === 'formAbilities' ? reported : 3055,
         learnsets: key === 'learnsets' ? reported : 116519,
+        natures: 25,
+        teraTypes: 19,
+        formTeraOptions: 25_184,
+        formGigantamaxOptions: 42,
       },
-    } as unknown as Pick<ReferenceDataset, 'moves' | 'forms' | 'formAbilities' | 'learnsets' | 'reportedCounts'>
+      natures: Array.from({ length: 25 }),
+      teraTypes: Array.from({ length: 19 }),
+      formTeraOptions: Array.from({ length: 25_184 }),
+      formGigantamaxOptions: Array.from({ length: 42 }),
+    } as unknown as Pick<
+      ReferenceDataset,
+      | 'moves'
+      | 'forms'
+      | 'formAbilities'
+      | 'learnsets'
+      | 'natures'
+      | 'teraTypes'
+      | 'formTeraOptions'
+      | 'formGigantamaxOptions'
+      | 'reportedCounts'
+    >
 
     expect(() => assertOptionFilterPublicationCounts(candidate)).toThrow(expected)
   })

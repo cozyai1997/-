@@ -56,6 +56,14 @@ export type BattleReportedCounts = {
   formGigantamaxOptions: number
 }
 
+export type BattleExpectedRowCounts = BattleReportedCounts
+
+export type BattleDatasetProfile = {
+  playableForms: number
+  battleOnlyForms: number
+  battleOnlyDiagnostics: number
+}
+
 export type ReferenceDataset = {
   version: string
   sourceCommits: Record<string, string>
@@ -125,6 +133,7 @@ export type ValidationReport = {
     reported: number
   }>
   manifestIssues: string[]
+  battleDataIssues: string[]
   sourceCommits: Record<string, string>
   sha256: Record<string, string>
 }
@@ -143,10 +152,30 @@ export const productionExpectedRowCounts: ExpectedRowCounts = {
   typeMatchups: 324,
 }
 
+export const productionExpectedBattleRowCounts: BattleExpectedRowCounts = {
+  teraTypes: 19,
+  formTeraOptions: 25_184,
+  formGigantamaxOptions: 42,
+}
+
+export const productionExpectedBattleDatasetProfile: BattleDatasetProfile = {
+  playableForms: 1_334,
+  battleOnlyForms: 164,
+  battleOnlyDiagnostics: 9,
+}
+
 const rowCountKeys = Object.keys(productionExpectedRowCounts) as Array<keyof ExpectedRowCounts>
 const hangulPattern = /[ㄱ-ㅎㅏ-ㅣ가-힣]/u
 const commitPattern = /^[0-9a-f]{40}$/u
 const sha256Pattern = /^[0-9a-f]{64}$/u
+const nonHpStatKeys = new Set<NonHpStatKey>([
+  'attack',
+  'defense',
+  'special_attack',
+  'special_defense',
+  'speed',
+])
+const statKeys = ['hp', 'attack', 'defense', 'special_attack', 'special_defense', 'speed'] as const
 
 function rowKey(table: KoreanFieldTable, row: Record<string, unknown>, index: number): string {
   if (typeof row.id === 'string' && row.id.trim()) return row.id
@@ -174,9 +203,16 @@ function addBrokenReference(
 
 export function validateReferenceData(
   dataset: ReferenceDataset,
-  options: { expectedRowCounts?: ExpectedRowCounts } = {},
+  options: {
+    expectedRowCounts?: ExpectedRowCounts
+    expectedBattleRowCounts?: BattleExpectedRowCounts
+    expectedBattleDatasetProfile?: BattleDatasetProfile
+  } = {},
 ): ValidationReport {
   const expectedRowCounts = options.expectedRowCounts ?? productionExpectedRowCounts
+  const expectedBattleRowCounts = options.expectedBattleRowCounts ?? productionExpectedBattleRowCounts
+  const expectedBattleDatasetProfile = options.expectedBattleDatasetProfile
+    ?? productionExpectedBattleDatasetProfile
   const rowCounts = Object.fromEntries(
     rowCountKeys.map((table) => [table, dataset[table].length]),
   ) as ExpectedRowCounts
@@ -184,6 +220,7 @@ export function validateReferenceData(
   const brokenReferences: ValidationReport['brokenReferences'] = []
   const countMismatches: ValidationReport['countMismatches'] = []
   const manifestIssues: string[] = []
+  const battleDataIssues: string[] = []
 
   for (const [table, fields] of Object.entries(requiredKoreanFields) as Array<
     [KoreanFieldTable, readonly string[]]
@@ -208,6 +245,29 @@ export function validateReferenceData(
     }
   }
 
+  for (const [table, expected] of Object.entries(expectedBattleRowCounts) as Array<
+    [keyof BattleExpectedRowCounts, number]
+  >) {
+    const actual = dataset[table].length
+    const reported = dataset.reportedCounts[table]
+    if (actual !== expected || reported !== actual) {
+      battleDataIssues.push(`${table}:count:actual=${actual}:reported=${reported}:expected=${expected}`)
+    }
+  }
+  const actualBattleDatasetProfile: BattleDatasetProfile = {
+    playableForms: dataset.forms.filter((form) => !form.isBattleOnly).length,
+    battleOnlyForms: dataset.forms.filter((form) => form.isBattleOnly).length,
+    battleOnlyDiagnostics: dataset.battleOnlyDiagnostics.length,
+  }
+  for (const [field, expected] of Object.entries(expectedBattleDatasetProfile) as Array<
+    [keyof BattleDatasetProfile, number]
+  >) {
+    const actual = actualBattleDatasetProfile[field]
+    if (actual !== expected) {
+      battleDataIssues.push(`${field}:count:actual=${actual}:expected=${expected}`)
+    }
+  }
+
   if (!dataset.version.trim()) manifestIssues.push('version:missing')
   if (Object.keys(dataset.sourceCommits).length === 0) manifestIssues.push('sourceCommits:missing')
   for (const [source, commit] of Object.entries(dataset.sourceCommits)) {
@@ -224,6 +284,8 @@ export function validateReferenceData(
   const formIds = new Set(formsById.keys())
   const abilityIds = new Set(dataset.abilities.map((row) => row.id))
   const moveIds = new Set(dataset.moves.map((row) => row.id))
+  const teraTypeIds = new Set(dataset.teraTypes.map((row) => row.id))
+  const teraOptionsByFormId = new Map<string, ReferenceFormTeraOptionRow[]>()
 
   for (const row of dataset.species) {
     addBrokenReference(brokenReferences, 'species', row.id, 'types', row.primaryTypeId, typeIds)
@@ -268,18 +330,74 @@ export function validateReferenceData(
     addBrokenReference(brokenReferences, 'typeMatchups', key, 'types', row.defendingTypeId, typeIds)
   })
 
+  for (const form of dataset.forms) {
+    if (statKeys.some((key) => !Number.isInteger(form.baseStats[key]) || form.baseStats[key] < 1 || form.baseStats[key] > 255)) {
+      battleDataIssues.push(`forms:${form.id}:baseStats`)
+    }
+  }
+  for (const nature of dataset.natures) {
+    const { increasedStat, decreasedStat } = nature
+    const hasIncompleteAdjustment = (increasedStat === null) !== (decreasedStat === null)
+    if (
+      hasIncompleteAdjustment
+      || (increasedStat !== null && !nonHpStatKeys.has(increasedStat))
+      || (decreasedStat !== null && !nonHpStatKeys.has(decreasedStat))
+    ) {
+      battleDataIssues.push(`natures:${nature.id}:adjustment`)
+    }
+  }
+  for (const option of dataset.formTeraOptions) {
+    const form = formsById.get(option.formId)
+    if (!form) {
+      battleDataIssues.push(`formTeraOptions:${option.formId}:formId`)
+      continue
+    }
+    if (!teraTypeIds.has(option.teraTypeId)) {
+      battleDataIssues.push(`formTeraOptions:${option.formId}:teraTypeId`)
+      continue
+    }
+    teraOptionsByFormId.set(option.formId, [...(teraOptionsByFormId.get(option.formId) ?? []), option])
+  }
+  for (const form of dataset.forms) {
+    const optionsForForm = teraOptionsByFormId.get(form.id) ?? []
+    if (form.isBattleOnly && optionsForForm.length > 0) {
+      battleDataIssues.push(`formTeraOptions:${form.id}:battle-only`)
+    }
+    if (!form.isBattleOnly && optionsForForm.length === 0) {
+      battleDataIssues.push(`formTeraOptions:${form.id}:missing`)
+    }
+    if (!form.isBattleOnly && (form.speciesId === 'ogerpon' || form.speciesId === 'terapagos') && optionsForForm.length !== 1) {
+      battleDataIssues.push(`formTeraOptions:${form.id}:restricted-count`)
+    }
+  }
+  for (const option of dataset.formGigantamaxOptions) {
+    const source = formsById.get(option.sourceFormId)
+    const target = formsById.get(option.gigantamaxFormId)
+    if (
+      !source
+      || !target
+      || source.speciesId !== target.speciesId
+      || source.isBattleOnly
+      || !target.isBattleOnly
+    ) {
+      battleDataIssues.push(`formGigantamaxOptions:${option.sourceFormId}:${option.gigantamaxFormId}`)
+    }
+  }
+
   return {
     valid:
       missingKoreanFields.length === 0 &&
       brokenReferences.length === 0 &&
       countMismatches.length === 0 &&
-      manifestIssues.length === 0,
+      manifestIssues.length === 0 &&
+      battleDataIssues.length === 0,
     version: dataset.version,
     rowCounts,
     missingKoreanFields,
     brokenReferences,
     countMismatches,
     manifestIssues,
+    battleDataIssues,
     sourceCommits: dataset.sourceCommits,
     sha256: dataset.sha256,
   }
