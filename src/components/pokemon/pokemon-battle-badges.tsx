@@ -11,7 +11,7 @@ export function PokemonBattleBadges({
     <div className="battle-badges">
       <span className="battle-badge">테라타입: {teraTypeNameKo ?? '미지정'}</span>
       <span className="battle-badge">
-        {hasGigantamaxFactor ? '거다이맥스 가능' : '거다이맥스 불가능'}
+        {hasGigantamaxFactor ? '거다이맥스 인자 보유' : '거다이맥스 인자 없음'}
       </span>
     </div>
   )

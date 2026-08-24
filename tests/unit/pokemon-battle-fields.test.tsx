@@ -103,7 +103,19 @@ describe('PokemonBattleBadges', () => {
     )
 
     expect(screen.getByText('테라타입: 불꽃')).toBeVisible()
-    expect(screen.getByText('거다이맥스 가능')).toBeVisible()
+    expect(screen.getByText('거다이맥스 인자 보유')).toBeVisible()
     expect(screen.queryByText(/internal|type-fire|uuid/i)).not.toBeInTheDocument()
+  })
+
+  it('저장된 false 값은 가능성 대신 인자 없음 상태로 표시한다', () => {
+    render(
+      <PokemonBattleBadges
+        teraTypeNameKo={null}
+        hasGigantamaxFactor={false}
+      />,
+    )
+
+    expect(screen.getByText('거다이맥스 인자 없음')).toBeVisible()
+    expect(screen.queryByText('거다이맥스 불가능')).not.toBeInTheDocument()
   })
 })

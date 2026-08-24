@@ -653,7 +653,7 @@ test.describe.serial('보유 포켓몬 등록', () => {
     await expect(page.getByText('파도')).toBeVisible()
     await expect(page.getByText('물결')).toBeVisible()
     await expect(page.getByText('테라타입: 물')).toHaveCount(2)
-    await expect(page.getByText('거다이맥스 가능')).toHaveCount(2)
+    await expect(page.getByText('거다이맥스 인자 보유')).toHaveCount(2)
 
     await expectNoInternalIdentifiers(page)
 
@@ -726,13 +726,13 @@ test.describe.serial('보유 포켓몬 등록', () => {
     await expect(page.getByText('Lv. 61')).toBeVisible()
     await expect(page.getByRole('paragraph').filter({ hasText: '특수공격 중심 육성' })).toBeVisible()
     await expect(page.getByLabel('저장된 전투 설정')).toContainText('테라타입: 스텔라')
-    await expect(page.getByLabel('저장된 전투 설정')).toContainText('거다이맥스 불가능')
+    await expect(page.getByLabel('저장된 전투 설정')).toContainText('거다이맥스 인자 없음')
 
     await page.getByLabel('테라타입').selectOption({ label: '물' })
     await page.getByRole('checkbox', { name: '거다이맥스 인자 보유' }).check()
     await page.getByRole('button', { name: '빠른 수정 저장' }).click()
     await expect(page.getByLabel('저장된 전투 설정')).toContainText('테라타입: 물')
-    await expect(page.getByLabel('저장된 전투 설정')).toContainText('거다이맥스 가능')
+    await expect(page.getByLabel('저장된 전투 설정')).toContainText('거다이맥스 인자 보유')
 
     await page.getByRole('button', { name: '보호 정보 정정 열기' }).click()
     await page.getByLabel('정정 모습').selectOption({ label: '물결 모습' })
@@ -989,7 +989,7 @@ async function registerPokemon(
 
   await expect(page.getByText('7 / 7단계')).toBeVisible()
   await expect(page.getByText('테라타입: 물')).toBeVisible()
-  await expect(page.getByText('거다이맥스 가능')).toBeVisible()
+  await expect(page.getByText('거다이맥스 인자 보유')).toBeVisible()
   const finalStats = page.getByRole('table', { name: '최종 능력치' })
   await expect(finalStats.getByRole('row', { name: /HP 130 0 31 0 244/ })).toBeVisible()
   await expect(finalStats.getByRole('row', { name: /스피드 65 0 31 252 152/ })).toBeVisible()

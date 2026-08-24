@@ -101,13 +101,46 @@ describe('Cobbleverse 전투 데이터 정규화', () => {
     const options = buildFormTeraOptions(forms.slice(3, 9), teraTypes)
     const idsByForm = Object.groupBy(options, (row) => row.formId)
 
-    expect(teraTypes).toHaveLength(19)
-    expect(teraTypes.at(-1)).toEqual({ id: 'stellar', nameKo: '스텔라', referenceTypeId: null, sortOrder: 19 })
+    expect(teraTypes).toEqual([
+      { id: 'normal', nameKo: '노말', referenceTypeId: 'normal', sortOrder: 0 },
+      { id: 'fighting', nameKo: '격투', referenceTypeId: 'fighting', sortOrder: 1 },
+      { id: 'flying', nameKo: '비행', referenceTypeId: 'flying', sortOrder: 2 },
+      { id: 'poison', nameKo: '독', referenceTypeId: 'poison', sortOrder: 3 },
+      { id: 'ground', nameKo: '땅', referenceTypeId: 'ground', sortOrder: 4 },
+      { id: 'rock', nameKo: '바위', referenceTypeId: 'rock', sortOrder: 5 },
+      { id: 'bug', nameKo: '벌레', referenceTypeId: 'bug', sortOrder: 6 },
+      { id: 'ghost', nameKo: '고스트', referenceTypeId: 'ghost', sortOrder: 7 },
+      { id: 'steel', nameKo: '강철', referenceTypeId: 'steel', sortOrder: 8 },
+      { id: 'fire', nameKo: '불꽃', referenceTypeId: 'fire', sortOrder: 9 },
+      { id: 'water', nameKo: '물', referenceTypeId: 'water', sortOrder: 10 },
+      { id: 'grass', nameKo: '풀', referenceTypeId: 'grass', sortOrder: 11 },
+      { id: 'electric', nameKo: '전기', referenceTypeId: 'electric', sortOrder: 12 },
+      { id: 'psychic', nameKo: '에스퍼', referenceTypeId: 'psychic', sortOrder: 13 },
+      { id: 'ice', nameKo: '얼음', referenceTypeId: 'ice', sortOrder: 14 },
+      { id: 'dragon', nameKo: '드래곤', referenceTypeId: 'dragon', sortOrder: 15 },
+      { id: 'dark', nameKo: '악', referenceTypeId: 'dark', sortOrder: 16 },
+      { id: 'fairy', nameKo: '페어리', referenceTypeId: 'fairy', sortOrder: 17 },
+      { id: 'stellar', nameKo: '스텔라', referenceTypeId: null, sortOrder: 18 },
+    ])
     expect(idsByForm['ogerpon-normal']?.map((row) => row.teraTypeId)).toEqual(['grass'])
     expect(idsByForm['ogerpon-wellspring']?.map((row) => row.teraTypeId)).toEqual(['water'])
     expect(idsByForm['ogerpon-hearthflame']?.map((row) => row.teraTypeId)).toEqual(['fire'])
     expect(idsByForm['ogerpon-cornerstone']?.map((row) => row.teraTypeId)).toEqual(['rock'])
     expect(idsByForm['terapagos-normal']?.map((row) => row.teraTypeId)).toEqual(['stellar'])
+  })
+
+  it('테라타입 원본의 누락·추가·중복 ID를 fail closed로 거부한다', () => {
+    expect(() => buildTeraTypes(mechanicsSource.types.filter((type) => type.id !== 'fairy')))
+      .toThrow('tera-types:missing:fairy')
+    expect(() => buildTeraTypes([
+      ...mechanicsSource.types,
+      { id: 'unknown', nameKo: '알 수 없음' },
+    ])).toThrow('tera-types:unexpected:unknown')
+    const duplicate = mechanicsSource.types[0]!
+    expect(() => buildTeraTypes([
+      ...mechanicsSource.types,
+      duplicate,
+    ])).toThrow(`tera-types:duplicate:${duplicate.id}`)
   })
 
   it('aspects 일치와 명시적 별칭으로 거다이맥스 소스 폼을 연결한다', () => {
@@ -124,6 +157,12 @@ describe('Cobbleverse 전투 데이터 정규화', () => {
 
     expect(result.forms).toHaveLength(1_498)
     expect(result.forms.filter((form) => !form.isBattleOnly)).toHaveLength(1_334)
+    expect(result.teraTypes.map(({ id, sortOrder }) => [id, sortOrder])).toEqual([
+      ['normal', 0], ['fighting', 1], ['flying', 2], ['poison', 3], ['ground', 4],
+      ['rock', 5], ['bug', 6], ['ghost', 7], ['steel', 8], ['fire', 9], ['water', 10],
+      ['grass', 11], ['electric', 12], ['psychic', 13], ['ice', 14], ['dragon', 15],
+      ['dark', 16], ['fairy', 17], ['stellar', 18],
+    ])
     expect(result.formTeraOptions).toHaveLength(25_184)
     expect(result.formGigantamaxOptions).toHaveLength(42)
     expect(result.battleOnlyDiagnostics).toHaveLength(9)

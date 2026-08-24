@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { buildTeraTypes } from '../../scripts/data/normalize-pokemon-battle-data'
 
 type LocalEnvironment = { API_URL: string; SERVICE_ROLE_KEY: string }
 
@@ -32,10 +33,13 @@ let rotationOwnerId: string | null = null
 const candidateDigest = 'a'.repeat(64)
 const publicationVersion = `atomic-${ids.publication}`
 
-const canonicalTeraIdentifiers = [
-  'normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel',
-  'fire', 'water', 'grass', 'electric', 'psychic', 'ice', 'dragon', 'dark', 'fairy', 'stellar',
-] as const
+const producerTeraTypes = buildTeraTypes([
+  'normal', 'fire', 'water', 'electric', 'grass', 'ice', 'fighting', 'poison', 'ground',
+  'flying', 'psychic', 'bug', 'rock', 'ghost', 'dragon', 'dark', 'steel', 'fairy',
+].map((id) => ({ id, nameKo: `테라 ${id}` })))
+const producerTeraSqlValues = producerTeraTypes
+  .map((row, sourceOrder) => `(${sourceOrder}, '${row.id}', '${row.nameKo}', ${row.sortOrder})`)
+  .join(',')
 
 function localEnvironment(): LocalEnvironment {
   const cliPath = resolve(process.cwd(), 'node_modules/supabase/dist/supabase.js')
@@ -248,7 +252,7 @@ begin
       'form_id', null,
       'move_identifier', 'atomic-move-' || (value % 826) || '-${ids.publication}',
       'learn_method', 'level',
-      'learn_level', 0,
+      'learn_level', 100,
       'condition_ko', '레벨 상승으로 습득'
     )
   from generate_series(0, 116518) as value;
@@ -292,16 +296,16 @@ begin
   insert into public.reference_option_filter_publication_staging (
     batch_id, publication_id, row_kind, source_order, payload
   )
-  select '${batchId}', '${ids.publication}', 'tera_type', ordinality - 1,
+  select '${batchId}', '${ids.publication}', 'tera_type', source_order,
     jsonb_build_object(
       'tera_type_id', gen_random_uuid(),
       'identifier', identifier,
-      'name_ko', '테라 ' || identifier,
+      'name_ko', name_ko,
       'reference_type_id', case when identifier = 'stellar' then null else '${ids.type}'::uuid end,
-      'sort_order', ordinality - 1,
+      'sort_order', sort_order,
       'is_active', true
     )
-  from unnest(array['${canonicalTeraIdentifiers.join("','")}']) with ordinality as tera(identifier, ordinality);
+  from (values ${producerTeraSqlValues}) as tera(source_order, identifier, name_ko, sort_order);
 
   insert into public.reference_option_filter_publication_staging (
     batch_id, publication_id, row_kind, source_order, payload
@@ -591,7 +595,7 @@ $cleanup$;`)
     expect(cleanup.error).toBeNull()
   }, 60_000)
 
-  it('active publication을 완전히 교체하고 아홉 종류 staging을 모두 지운다', async () => {
+  it('learn level 경계를 검증하고 active publication의 아홉 종류 staging을 모두 교체한다', async () => {
     for (const batchId of [ids.firstSuccessfulBatch]) {
       runLocalSql(stagedRowsSql(batchId, false))
       runLocalSql(`update public.reference_option_filter_publication_staging
@@ -620,6 +624,20 @@ $cleanup$;`)
       runLocalSql(`update public.reference_option_filter_publication_staging
         set payload = jsonb_set(payload, '{sort_order}', '0')
         where batch_id = '${batchId}' and row_kind = 'tera_type' and source_order = 0;`)
+      runLocalSql(`update public.reference_option_filter_publication_staging
+        set payload = jsonb_set(payload, '{learn_level}', case source_order
+          when 0 then '101'::jsonb when 1 then '-1'::jsonb else '"1.5"'::jsonb end)
+        where batch_id = '${batchId}' and row_kind = 'learnset' and source_order in (0, 1, 2);`)
+      const invalidLearnLevels = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+        p_publication_id: ids.publication,
+        p_batch_id: batchId,
+        p_candidate_digest: candidateDigest,
+        p_expected_version: publicationVersion,
+      })
+      expect(invalidLearnLevels.error?.message).toContain('learnset level must be between 0 and 100')
+      runLocalSql(`update public.reference_option_filter_publication_staging
+        set payload = jsonb_set(payload, '{learn_level}', '100')
+        where batch_id = '${batchId}' and row_kind = 'learnset' and source_order in (0, 1, 2);`)
       const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
         p_publication_id: ids.publication,
         p_batch_id: batchId,
@@ -629,7 +647,7 @@ $cleanup$;`)
       expect(replacement.error).toBeNull()
     }
 
-    const [moveCount, formAbilityCount, learnsetCount, battleProfileCount, battleOnlyCount, natureCount, teraTypeCount, teraOptionCount, gmaxCount, move, form, stagingResidue] = await Promise.all([
+    const [moveCount, formAbilityCount, learnsetCount, battleProfileCount, battleOnlyCount, natureCount, teraTypeCount, teraOptionCount, gmaxCount, move, form, publishedLearnset, stagingResidue] = await Promise.all([
       admin.from('reference_moves').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
       admin.from('reference_form_abilities').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
       admin.from('reference_move_learnsets').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
@@ -641,6 +659,7 @@ $cleanup$;`)
       admin.from('reference_form_gigantamax_options').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
       admin.from('reference_moves').select('name_ko').eq('id', ids.move).single(),
       admin.from('reference_forms').select('base_form_id').eq('id', ids.form).single(),
+      admin.from('reference_move_learnsets').select('learn_level').eq('publication_id', ids.publication).limit(1).single(),
       admin.from('reference_option_filter_publication_staging').select('*', { count: 'exact', head: true }).eq('publication_id', ids.publication),
     ])
     expect(moveCount.count).toBe(826)
@@ -654,6 +673,7 @@ $cleanup$;`)
     expect(gmaxCount.count).toBe(42)
     expect(move.data).toEqual({ name_ko: '새 기술 0' })
     expect(form.data).toEqual({ base_form_id: ids.baseForm })
+    expect(publishedLearnset.data).toEqual({ learn_level: 100 })
     expect(stagingResidue.count).toBe(0)
   }, 60_000)
 

@@ -48,8 +48,8 @@ describe('내 포켓몬 목록', () => {
 
     expect(screen.getByText('테라타입: 물')).toBeVisible()
     expect(screen.getByText('테라타입: 미지정')).toBeVisible()
-    expect(screen.getByText('거다이맥스 불가능')).toBeVisible()
-    expect(screen.getByText('거다이맥스 가능')).toBeVisible()
+    expect(screen.getByText('거다이맥스 인자 없음')).toBeVisible()
+    expect(screen.getByText('거다이맥스 인자 보유')).toBeVisible()
     expect(screen.queryByText(/tera-/)).not.toBeInTheDocument()
   })
 })

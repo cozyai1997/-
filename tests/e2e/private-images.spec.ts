@@ -7,6 +7,8 @@ const email = `private-image-${suffix}@example.com`
 const password = 'Private-image-test-2026!'
 let admin: SupabaseClient
 let userId = ''
+let publicationId = ''
+let previousActivePublicationId = ''
 let speciesId = ''
 let formId = ''
 let pokemonId = ''
@@ -24,6 +26,28 @@ test.describe.serial('비공개 포켓몬 이미지', () => {
     if (created.error || !created.data.user) throw created.error ?? new Error('사용자 생성 실패')
     userId = created.data.user.id
 
+    const previousActive = await admin
+      .from('data_publications')
+      .select('id')
+      .eq('status', 'active')
+      .maybeSingle()
+    if (previousActive.error) throw previousActive.error
+    previousActivePublicationId = previousActive.data?.id ?? ''
+    if (previousActivePublicationId) {
+      const retired = await admin.from('data_publications')
+        .update({ status: 'retired' })
+        .eq('id', previousActivePublicationId)
+      if (retired.error) throw retired.error
+    }
+    const publication = await admin.from('data_publications').insert({
+      version: `private-image-e2e-${suffix}`,
+      status: 'active',
+      validated_at: new Date().toISOString(),
+      activated_at: new Date().toISOString(),
+    }).select('id').single()
+    if (publication.error) throw publication.error
+    publicationId = publication.data.id
+
     const occupiedDexNumbers = await admin
       .from('reference_species')
       .select('national_dex_number')
@@ -40,6 +64,7 @@ test.describe.serial('비공개 포켓몬 이미지', () => {
     if (!nationalDexNumber) throw new Error('개인 이미지 E2E 도감번호 픽스처 공간이 부족합니다.')
 
     const species = await admin.from('reference_species').insert({
+      publication_id: publicationId,
       identifier: `image-eevee-${suffix}`,
       national_dex_number: nationalDexNumber,
       name_ko: '이브이',
@@ -48,6 +73,7 @@ test.describe.serial('비공개 포켓몬 이미지', () => {
     if (species.error) throw species.error
     speciesId = species.data.id
     const form = await admin.from('reference_forms').insert({
+      publication_id: publicationId,
       identifier: `image-eevee-form-${suffix}`,
       species_id: speciesId,
       name_ko: '기본 모습',
@@ -87,6 +113,24 @@ test.describe.serial('비공개 포켓몬 이미지', () => {
     }
     if (formId) await admin.from('reference_forms').delete().eq('id', formId)
     if (speciesId) await admin.from('reference_species').delete().eq('id', speciesId)
+    if (publicationId) {
+      const retired = await admin.from('data_publications')
+        .update({ status: 'retired' })
+        .eq('id', publicationId)
+      if (retired.error) throw retired.error
+    }
+    if (previousActivePublicationId) {
+      const restored = await admin.from('data_publications')
+        .update({ status: 'active' })
+        .eq('id', previousActivePublicationId)
+      if (restored.error) throw restored.error
+    }
+    if (publicationId) {
+      const deletedPublication = await admin.from('data_publications')
+        .delete()
+        .eq('id', publicationId)
+      if (deletedPublication.error) throw deletedPublication.error
+    }
   })
 
   test('개인 이미지를 WebP로 저장해 표시하고 삭제하면 실루엣으로 돌아간다', async ({ page }) => {

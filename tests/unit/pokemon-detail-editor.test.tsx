@@ -304,7 +304,7 @@ describe('포켓몬 상세 필터 수정', () => {
     />)
 
     expect(within(screen.getByLabelText('저장된 전투 설정')).getByText('테라타입: 물')).toBeVisible()
-    expect(within(screen.getByLabelText('저장된 전투 설정')).getByText('거다이맥스 가능')).toBeVisible()
+    expect(within(screen.getByLabelText('저장된 전투 설정')).getByText('거다이맥스 인자 보유')).toBeVisible()
 
     const table = screen.getByRole('table', { name: '보유 포켓몬 능력치' })
     for (const heading of [
@@ -386,7 +386,7 @@ describe('포켓몬 상세 필터 수정', () => {
     )
     const savedBattle = screen.getByLabelText('저장된 전투 설정')
     expect(within(savedBattle).getByText('테라타입: 물')).toBeVisible()
-    expect(within(savedBattle).getByText('거다이맥스 가능')).toBeVisible()
+    expect(within(savedBattle).getByText('거다이맥스 인자 보유')).toBeVisible()
   })
 
   it('최신 성공 프로필이 불가능하면 로딩 중 인자를 보존했다가 비활성화하고 해제한다', async () => {
@@ -576,7 +576,7 @@ describe('포켓몬 상세 필터 수정', () => {
     await screen.findByText('보호 정보를 정정하고 변경 이력을 보존했습니다.')
     let savedBattle = screen.getByLabelText('저장된 전투 설정')
     expect(within(savedBattle).getByText('테라타입: 물')).toBeVisible()
-    expect(within(savedBattle).getByText('거다이맥스 가능')).toBeVisible()
+    expect(within(savedBattle).getByText('거다이맥스 인자 보유')).toBeVisible()
 
     view.unmount()
     render(<PokemonDetailEditor
@@ -588,7 +588,7 @@ describe('포켓몬 상세 필터 수정', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '빠른 수정 저장' })).toBeEnabled())
     savedBattle = screen.getByLabelText('저장된 전투 설정')
     expect(within(savedBattle).getByText('테라타입: 물')).toBeVisible()
-    expect(within(savedBattle).getByText('거다이맥스 가능')).toBeVisible()
+    expect(within(savedBattle).getByText('거다이맥스 인자 보유')).toBeVisible()
     expect(correctOwnedPokemon).toHaveBeenCalledWith(
       expect.anything(),
       'owned-pokemon',

@@ -61,7 +61,10 @@ const webServerEnvironment = {
 
 export default defineConfig({
   testDir: './tests/e2e',
-  fullyParallel: true,
+  // E2E fixtures rotate the singleton active reference publication, so local DB
+  // suites must not overlap each other's publication lifecycle.
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',

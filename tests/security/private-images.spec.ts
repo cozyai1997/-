@@ -17,6 +17,8 @@ const userIds: string[] = []
 let admin: SupabaseClient
 let alice: Identity
 let bob: Identity
+const publicationId = randomUUID()
+let previousActivePublicationId: string | null = null
 let speciesId = ''
 let formId = ''
 let pokemonId = ''
@@ -32,7 +34,30 @@ describeLocalSupabase('사용자별 비공개 포켓몬 이미지', () => {
     alice = await createIdentity(environment, 'image-alice')
     bob = await createIdentity(environment, 'image-bob')
 
+    const previousActive = await admin
+      .from('data_publications')
+      .select('id')
+      .eq('status', 'active')
+      .maybeSingle()
+    if (previousActive.error) throw previousActive.error
+    previousActivePublicationId = previousActive.data?.id ?? null
+    if (previousActivePublicationId) {
+      const retired = await admin.from('data_publications')
+        .update({ status: 'retired' })
+        .eq('id', previousActivePublicationId)
+      if (retired.error) throw retired.error
+    }
+    const publication = await admin.from('data_publications').insert({
+      id: publicationId,
+      version: `private-images-${publicationId}`,
+      status: 'active',
+      validated_at: new Date().toISOString(),
+      activated_at: new Date().toISOString(),
+    })
+    if (publication.error) throw publication.error
+
     const species = await admin.from('reference_species').insert({
+      publication_id: publicationId,
       identifier: `image-eevee-${randomUUID()}`,
       national_dex_number: 9002,
       name_ko: '이브이',
@@ -42,6 +67,7 @@ describeLocalSupabase('사용자별 비공개 포켓몬 이미지', () => {
     speciesId = species.data.id
 
     const form = await admin.from('reference_forms').insert({
+      publication_id: publicationId,
       identifier: `image-eevee-form-${randomUUID()}`,
       species_id: speciesId,
       name_ko: '기본 모습',
@@ -81,6 +107,20 @@ describeLocalSupabase('사용자별 비공개 포켓몬 이미지', () => {
     }
     if (formId) await admin.from('reference_forms').delete().eq('id', formId)
     if (speciesId) await admin.from('reference_species').delete().eq('id', speciesId)
+    const retired = await admin.from('data_publications')
+      .update({ status: 'retired' })
+      .eq('id', publicationId)
+    if (retired.error) throw retired.error
+    if (previousActivePublicationId) {
+      const restored = await admin.from('data_publications')
+        .update({ status: 'active' })
+        .eq('id', previousActivePublicationId)
+      if (restored.error) throw restored.error
+    }
+    const deletedPublication = await admin.from('data_publications')
+      .delete()
+      .eq('id', publicationId)
+    if (deletedPublication.error) throw deletedPublication.error
   })
 
   it('소유자는 정해진 경로에 WebP를 올리고 내려받을 수 있다', async () => {

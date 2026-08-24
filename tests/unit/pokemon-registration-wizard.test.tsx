@@ -332,7 +332,7 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     await user.click(screen.getByRole('button', { name: '다음' }))
 
     expect(screen.getByText('테라타입: 물')).toBeVisible()
-    expect(screen.getByText('거다이맥스 가능')).toBeVisible()
+    expect(screen.getByText('거다이맥스 인자 보유')).toBeVisible()
     expect(screen.getByRole('table', { name: '최종 능력치' })).toBeVisible()
     expect(screen.getByRole('article', { name: '파도타기' })).toHaveTextContent('현재 기술 1')
     expect(screen.getByRole('article', { name: '파도타기' })).toHaveTextContent('기본 PP: 15')

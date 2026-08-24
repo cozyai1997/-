@@ -429,7 +429,7 @@ begin
     where staged.batch_id = p_batch_id and staged.publication_id = p_publication_id
       and staged.row_kind = 'learnset'
       and (
-        (staged.payload ->> 'learn_level') !~ '^(0|[1-9][0-9]?)$'
+        (staged.payload ->> 'learn_level') !~ '^(0|[1-9][0-9]?|100)$'
         or (staged.payload ->> 'learn_level')::integer > 100
       )
   ) then
@@ -655,6 +655,9 @@ begin
   if not form_changed and not tera_changed and not gigantamax_changed then return new; end if;
   select id into active_publication_id from public.data_publications where status = 'active';
   if active_publication_id is null then
+    if form_changed then
+      raise invalid_parameter_value using message = '활성 기준데이터 게시본이 없습니다.';
+    end if;
     if new.tera_type_id is not null or new.has_gigantamax_factor then
       raise invalid_parameter_value using message = '활성 기준데이터 게시본이 없습니다.';
     end if;
@@ -667,15 +670,22 @@ begin
     and form.publication_id = active_publication_id and species.publication_id = active_publication_id
     and form.is_active and species.is_active;
   if not found then
-    -- Legacy direct rows may refer to an unpublished historical form. They have no
-    -- battle selection to validate, so preserve them; the public create/correct RPCs
-    -- separately require a current playable form.
+    if form_changed then
+      raise invalid_parameter_value using message = '선택한 종과 모습이 활성 게시본에 없습니다.';
+    end if;
+    -- An unchanged historical row may be preserved, but cannot gain battle options.
+    -- Clearing stale options remains safe even after its source form is unpublished.
     if new.tera_type_id is not null or new.has_gigantamax_factor then
       raise invalid_parameter_value using message = '선택한 종과 모습이 활성 게시본에 없습니다.';
     end if;
     return new;
   end if;
-  if selected_battle_only then raise invalid_parameter_value using message = 'battle-only 모습은 보유 포켓몬으로 등록할 수 없습니다.'; end if;
+  if selected_battle_only then
+    if form_changed or new.tera_type_id is not null or new.has_gigantamax_factor then
+      raise invalid_parameter_value using message = 'battle-only 모습은 보유 포켓몬으로 등록할 수 없습니다.';
+    end if;
+    return new;
+  end if;
 
   if new.tera_type_id is not null and not exists (
     select 1 from public.reference_form_tera_options
@@ -782,26 +792,53 @@ create or replace function public.correct_owned_pokemon(
 ) returns public.owned_pokemon
 language plpgsql volatile security invoker set search_path = ''
 as $$
-declare owner_id uuid := auth.uid(); current_pokemon public.owned_pokemon; corrected public.owned_pokemon; next_ability_id uuid; before_moves jsonb;
+declare owner_id uuid := auth.uid(); active_publication_id uuid; current_pokemon public.owned_pokemon; corrected public.owned_pokemon; selected_base_form_id uuid; next_ability_id uuid; before_moves jsonb;
 begin
   if owner_id is null then raise insufficient_privilege using message = '인증된 사용자만 보호 정보를 정정할 수 있습니다.'; end if;
   if char_length(btrim(coalesce(p_reason_ko, ''))) < 5 then raise check_violation using message = '정정 사유는 5자 이상이어야 합니다.'; end if;
   select * into current_pokemon from public.owned_pokemon where id = p_owned_pokemon_id and user_id = owner_id for update;
   if not found then raise insufficient_privilege using message = '정정할 포켓몬을 찾을 수 없습니다.'; end if;
-  if not exists (
-    select 1 from public.reference_forms as form
+  select form.publication_id, form.base_form_id
+  into active_publication_id, selected_base_form_id
+  from public.reference_forms as form
     join public.reference_species as species on species.id = form.species_id
     join public.data_publications as publication on publication.id = form.publication_id
     where form.id = p_form_id and form.species_id = p_species_id
+      and species.publication_id = form.publication_id
       and form.is_active and species.is_active and publication.status = 'active'
-      and not form.is_battle_only
-  ) then
+      and not form.is_battle_only;
+  if not found then
     raise invalid_parameter_value using message = '정정할 종과 모습이 활성 게시본의 등록 가능한 모습과 일치하지 않습니다.';
   end if;
   select coalesce(jsonb_agg(jsonb_build_object('move_id', move_id, 'kind', kind, 'slot', slot, 'target_condition_ko', target_condition_ko) order by kind, slot), '[]'::jsonb) into before_moves from public.owned_pokemon_moves where owned_pokemon_id = current_pokemon.id;
   if p_species_id <> current_pokemon.species_id then delete from public.owned_pokemon_moves where owned_pokemon_id = current_pokemon.id; end if;
   next_ability_id := current_pokemon.ability_id;
-  if p_species_id <> current_pokemon.species_id or (p_form_id <> current_pokemon.form_id and not exists (select 1 from public.reference_form_abilities where form_id = p_form_id and ability_id = next_ability_id)) then next_ability_id := null; end if;
+  if p_species_id <> current_pokemon.species_id then
+    next_ability_id := null;
+  elsif p_form_id <> current_pokemon.form_id and next_ability_id is not null then
+    if exists (
+      select 1 from public.reference_form_abilities
+      where publication_id = active_publication_id and form_id = p_form_id
+    ) then
+      if not exists (
+        select 1 from public.reference_form_abilities as relation
+        join public.reference_abilities as ability on ability.id = relation.ability_id
+        where relation.publication_id = active_publication_id and relation.form_id = p_form_id
+          and relation.ability_id = next_ability_id
+          and ability.publication_id = active_publication_id and ability.is_active
+      ) then
+        next_ability_id := null;
+      end if;
+    elsif selected_base_form_id is null or not exists (
+      select 1 from public.reference_form_abilities as relation
+      join public.reference_abilities as ability on ability.id = relation.ability_id
+      where relation.publication_id = active_publication_id and relation.form_id = selected_base_form_id
+        and relation.ability_id = next_ability_id
+        and ability.publication_id = active_publication_id and ability.is_active
+    ) then
+      next_ability_id := null;
+    end if;
+  end if;
   perform set_config('app.owned_pokemon_correction_reason', btrim(p_reason_ko), true);
   perform set_config('app.owned_pokemon_correction_before_data', (to_jsonb(current_pokemon) || jsonb_build_object('dependent_state', jsonb_build_object('ability_id', current_pokemon.ability_id, 'moves', before_moves)))::text, true);
   update public.owned_pokemon set species_id = p_species_id, form_id = p_form_id, captured_on = p_captured_on, original_iv = p_original_iv, ability_id = next_ability_id

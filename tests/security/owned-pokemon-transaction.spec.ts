@@ -26,11 +26,14 @@ const ids = {
   type: randomUUID(),
   species: randomUUID(),
   otherSpecies: randomUUID(),
+  retiredSpecies: randomUUID(),
   baseForm: randomUUID(),
   exactForm: randomUUID(),
   fallbackForm: randomUUID(),
+  inactiveForm: randomUUID(),
   gigantamaxForm: randomUUID(),
   otherForm: randomUUID(),
+  retiredForm: randomUUID(),
   allowedTeraType: randomUUID(),
   secondAllowedTeraType: randomUUID(),
   invalidTeraType: randomUUID(),
@@ -136,6 +139,28 @@ function quickInput(pokemonId: string, abilityId: string | null) {
   }
 }
 
+function directInsertInput(
+  formId: string,
+  speciesId: string = ids.species,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    user_id: aliceId,
+    species_id: speciesId,
+    form_id: formId,
+    nickname: `직접등록-${randomUUID().slice(0, 8)}`,
+    gender: 'female' as const,
+    level: 12,
+    original_iv: stats,
+    effective_iv: stats,
+    ev: stats,
+    ability_id: null,
+    tera_type_id: null,
+    has_gigantamax_factor: false,
+    ...overrides,
+  }
+}
+
 describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
   beforeAll(async () => {
     const environment = localEnvironment()
@@ -212,6 +237,15 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
       description_ko: '종 정정 검증용',
     })
     expect(otherSpecies.error).toBeNull()
+    const retiredSpecies = await admin.from('reference_species').insert({
+      id: ids.retiredSpecies,
+      publication_id: ids.retiredPublication,
+      national_dex_number: nationalDexNumber + 2,
+      identifier: `transaction-retired-${ids.retiredSpecies}`,
+      name_ko: '은퇴 종',
+      description_ko: '은퇴 게시본 전용 종',
+    })
+    expect(retiredSpecies.error).toBeNull()
     const forms = await admin.from('reference_forms').insert([
       {
         id: ids.baseForm,
@@ -221,6 +255,7 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
         name_ko: '기본 모습',
         is_default: true,
         is_battle_only: false,
+        is_active: true,
       },
       {
         id: ids.exactForm,
@@ -231,6 +266,7 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
         name_ko: '정확한 모습',
         is_default: false,
         is_battle_only: false,
+        is_active: true,
       },
       {
         id: ids.fallbackForm,
@@ -241,6 +277,18 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
         name_ko: '대체 모습',
         is_default: false,
         is_battle_only: false,
+        is_active: true,
+      },
+      {
+        id: ids.inactiveForm,
+        publication_id: ids.publication,
+        species_id: ids.species,
+        base_form_id: ids.baseForm,
+        identifier: `transaction-inactive-${ids.inactiveForm}`,
+        name_ko: '비활성 모습',
+        is_default: false,
+        is_battle_only: false,
+        is_active: false,
       },
       {
         id: ids.gigantamaxForm,
@@ -250,6 +298,7 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
         name_ko: '거다이맥스 모습',
         is_default: false,
         is_battle_only: true,
+        is_active: true,
       },
       {
         id: ids.otherForm,
@@ -259,6 +308,17 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
         name_ko: '다른 종 모습',
         is_default: true,
         is_battle_only: false,
+        is_active: true,
+      },
+      {
+        id: ids.retiredForm,
+        publication_id: ids.retiredPublication,
+        species_id: ids.retiredSpecies,
+        identifier: `transaction-retired-${ids.retiredForm}`,
+        name_ko: '은퇴 모습',
+        is_default: true,
+        is_battle_only: false,
+        is_active: true,
       },
     ])
     expect(forms.error).toBeNull()
@@ -292,6 +352,7 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
     const battleOptions = await admin.from('reference_form_tera_options').insert([
       { publication_id: ids.publication, form_id: ids.exactForm, tera_type_id: ids.allowedTeraType },
       { publication_id: ids.publication, form_id: ids.exactForm, tera_type_id: ids.secondAllowedTeraType },
+      { publication_id: ids.publication, form_id: ids.inactiveForm, tera_type_id: ids.allowedTeraType },
     ])
     expect(battleOptions.error).toBeNull()
     const gigantamaxOptions = await admin.from('reference_form_gigantamax_options').insert({
@@ -335,6 +396,12 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
         publication_id: ids.retiredPublication,
         form_id: ids.exactForm,
         ability_id: ids.retiredAbility,
+        slot: 'retired',
+      },
+      {
+        publication_id: ids.retiredPublication,
+        form_id: ids.fallbackForm,
+        ability_id: ids.exactAbility,
         slot: 'retired',
       },
       {
@@ -442,12 +509,12 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
     collect('하위 모습 삭제', (await admin
       .from('reference_forms')
       .delete()
-      .in('id', [ids.exactForm, ids.fallbackForm, ids.gigantamaxForm, ids.otherForm])).error)
+      .in('id', [ids.exactForm, ids.fallbackForm, ids.inactiveForm, ids.gigantamaxForm, ids.otherForm, ids.retiredForm])).error)
     collect('기본 모습 삭제', (await admin.from('reference_forms').delete().eq('id', ids.baseForm)).error)
     collect('종 삭제', (await admin
       .from('reference_species')
       .delete()
-      .in('id', [ids.species, ids.otherSpecies])).error)
+      .in('id', [ids.species, ids.otherSpecies, ids.retiredSpecies])).error)
     collect('타입 삭제', (await admin.from('reference_types').delete().eq('id', ids.type)).error)
     collect('게시본 삭제', (await admin
       .from('data_publications')
@@ -672,6 +739,70 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
     expect(invalidCreate.error).not.toBeNull()
   })
 
+  it('직접 INSERT도 비활성 모습과 과거 게시본 모습을 모두 거부한다', async () => {
+    const inactive = await alice.from('owned_pokemon').insert(
+      directInsertInput(ids.inactiveForm),
+    )
+    const retired = await alice.from('owned_pokemon').insert(
+      directInsertInput(ids.retiredForm, ids.retiredSpecies),
+    )
+
+    expect(inactive.error).not.toBeNull()
+    expect(retired.error).not.toBeNull()
+    const inserted = await alice.from('owned_pokemon')
+      .select('id')
+      .in('form_id', [ids.inactiveForm, ids.retiredForm])
+    expect(inserted.data).toEqual([])
+  })
+
+  it('이미 저장된 모습이 비활성화돼도 동일 모습의 안전한 전투값 해제는 보존한다', async () => {
+    expect((await admin.from('reference_forms')
+      .update({ is_active: true })
+      .eq('id', ids.inactiveForm)).error).toBeNull()
+
+    let pokemonId: string | undefined
+    try {
+      const inserted = await alice.from('owned_pokemon')
+        .insert(directInsertInput(ids.inactiveForm, ids.species, {
+          tera_type_id: ids.allowedTeraType,
+        }))
+        .select('id')
+        .single()
+      expect(inserted.error).toBeNull()
+      pokemonId = inserted.data?.id
+      expect(pokemonId).toEqual(expect.any(String))
+
+      expect((await admin.from('reference_forms')
+        .update({ is_active: false })
+        .eq('id', ids.inactiveForm)).error).toBeNull()
+      const cleared = await alice.from('owned_pokemon')
+        .update({ level: 13, tera_type_id: null })
+        .eq('id', pokemonId as string)
+      expect(cleared.error).toBeNull()
+      expect((await alice.from('owned_pokemon')
+        .select('form_id,level,tera_type_id,has_gigantamax_factor')
+        .eq('id', pokemonId as string)
+        .single()).data).toEqual({
+        form_id: ids.inactiveForm,
+        level: 13,
+        tera_type_id: null,
+        has_gigantamax_factor: false,
+      })
+
+      const reintroduced = await alice.from('owned_pokemon')
+        .update({ tera_type_id: ids.allowedTeraType })
+        .eq('id', pokemonId as string)
+      expect(reintroduced.error).not.toBeNull()
+    } finally {
+      if (pokemonId) {
+        expect((await admin.from('owned_pokemon').delete().eq('id', pokemonId)).error).toBeNull()
+      }
+      expect((await admin.from('reference_forms')
+        .update({ is_active: false })
+        .eq('id', ids.inactiveForm)).error).toBeNull()
+    }
+  })
+
   it('구 10인자 빠른 수정은 전투 필드를 보존하고 정정은 새 폼에서 무효한 값을 정리한다', async () => {
     const created = await alice.rpc('create_owned_pokemon_with_moves', rpcInput({
       p_tera_type_id: ids.allowedTeraType,
@@ -837,6 +968,40 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
     })
     expect((audit.data?.after_data as { dependent_state?: { moves?: unknown[] } })
       .dependent_state?.moves).toHaveLength(2)
+  })
+
+  it('폼 정정 시 직접 관계가 없는 파생 모습은 기본 모습의 유효한 특성을 보존한다', async () => {
+    const created = await alice.rpc('create_owned_pokemon_with_moves', rpcInput({
+      p_form_id: ids.baseForm,
+      p_ability_id: ids.baseAbility,
+      p_nickname: `상속특성-${randomUUID().slice(0, 8)}`,
+    }))
+    expect(created.error).toBeNull()
+    const pokemonId = created.data as string
+
+    const corrected = await alice.rpc('correct_owned_pokemon', correctionInput(pokemonId, {
+      p_form_id: ids.fallbackForm,
+      p_reason_ko: '기본 모습 특성 상속 보존 검증',
+    }))
+    expect(corrected.error).toBeNull()
+    const [row, audit] = await Promise.all([
+      alice.from('owned_pokemon')
+        .select('form_id,ability_id')
+        .eq('id', pokemonId)
+        .single(),
+      alice.from('audit_events')
+        .select('after_data')
+        .eq('entity_id', pokemonId)
+        .eq('action', 'correct')
+        .single(),
+    ])
+    expect(row.data).toEqual({
+      form_id: ids.fallbackForm,
+      ability_id: ids.baseAbility,
+    })
+    expect(audit.data?.after_data).toMatchObject({
+      dependent_state: { ability_id: ids.baseAbility, moves: expect.any(Array) },
+    })
   })
 
   it('정정 후반 제약 실패는 먼저 지운 종속 행까지 한 트랜잭션으로 되돌린다', async () => {

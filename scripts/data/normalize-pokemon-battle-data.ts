@@ -16,6 +16,11 @@ type NatureSourceRow = {
 
 type ReferenceTypeRow = { id: string; nameKo: string }
 
+const canonicalTeraTypeOrder = [
+  'normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel',
+  'fire', 'water', 'grass', 'electric', 'psychic', 'ice', 'dragon', 'dark', 'fairy',
+] as const
+
 function normalizeAspects(aspects: string[]): string[] {
   return [...new Set(aspects.map((aspect) => aspect.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right))
 }
@@ -87,13 +92,22 @@ export function normalizeNatureRow(row: NatureSourceRow): ReferenceNatureRow {
 }
 
 export function buildTeraTypes(types: ReferenceTypeRow[]): ReferenceTeraTypeRow[] {
-  const ids = new Set<string>()
-  const teraTypes = types.map((type, index) => {
-    if (!type.id || ids.has(type.id)) throw new Error(`tera-types:duplicate:${type.id}`)
-    ids.add(type.id)
-    return { id: type.id, nameKo: type.nameKo, referenceTypeId: type.id, sortOrder: index }
+  const typesById = new Map<string, ReferenceTypeRow>()
+  for (const type of types) {
+    if (!type.id || typesById.has(type.id)) throw new Error(`tera-types:duplicate:${type.id}`)
+    typesById.set(type.id, type)
+  }
+  for (const id of typesById.keys()) {
+    if (!canonicalTeraTypeOrder.includes(id as (typeof canonicalTeraTypeOrder)[number])) {
+      throw new Error(`tera-types:unexpected:${id}`)
+    }
+  }
+  const teraTypes = canonicalTeraTypeOrder.map((id, sortOrder) => {
+    const type = typesById.get(id)
+    if (!type) throw new Error(`tera-types:missing:${id}`)
+    return { id, nameKo: type.nameKo, referenceTypeId: id, sortOrder }
   })
-  return [...teraTypes, { id: 'stellar', nameKo: '스텔라', referenceTypeId: null, sortOrder: 19 }]
+  return [...teraTypes, { id: 'stellar', nameKo: '스텔라', referenceTypeId: null, sortOrder: 18 }]
 }
 
 function ogerponTeraType(form: ReferenceFormRow): string {
