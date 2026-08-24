@@ -6,23 +6,33 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { retrySupabaseRead } from '@/lib/supabase/retry'
 import { PokemonMoveSlot } from '@/components/forms/pokemon-move-slot'
+import { PokemonBattleBadges } from '@/components/pokemon/pokemon-battle-badges'
+import { PokemonBattleFields } from '@/components/pokemon/pokemon-battle-fields'
+import { PokemonMoveCard } from '@/components/pokemon/pokemon-move-card'
+import { PokemonStatTable } from '@/components/pokemon/pokemon-stat-table'
+import { StatGlossary } from '@/components/pokemon/stat-glossary'
 import {
   createOwnedPokemon,
   listOwnedPokemonEditOptions,
   listPokemonFilteredOptions,
-  type MoveOption,
   type OwnedPokemonEditOptions,
   type PokemonFilteredOptions,
 } from '@/features/owned-pokemon/repository'
 import {
   createRegistrationDraft,
   readRegistrationDraft,
+  reconcileBattleSelections,
   reconcileFilteredSelections,
   reconcileSpeciesSelection,
   registrationDraftKey,
   type RegistrationDraft,
 } from '@/features/owned-pokemon/registration-state'
 import { statKeys, validateOwnedPokemon } from '@/features/owned-pokemon/schema'
+import {
+  calculateOwnedPokemonStats,
+  type OwnedPokemonStatResult,
+} from '@/features/stats/calculate-owned-pokemon-stats'
+import type { NatureAdjustment } from '@/features/stats/types'
 
 const stepTitles = [
   '종·모습', '기본 정보', '성격·특성', '원본·실전 IV', 'EV',
@@ -56,16 +66,6 @@ const moveSlots = [0, 1, 2, 3] as const
 type FilterStatus = 'idle' | 'loading' | 'loaded' | 'error'
 type ReferenceStatus = 'loading' | 'loaded' | 'error'
 
-function selectedMoveNames(
-  selected: ReadonlyArray<{ moveId: string }>,
-  moves: MoveOption[],
-) {
-  const names = selected
-    .map((entry) => moves.find((move) => move.id === entry.moveId)?.nameKo)
-    .filter((name): name is string => Boolean(name))
-  return names.length ? names.join(', ') : '미지정'
-}
-
 export function PokemonRegistrationWizard() {
   const router = useRouter()
   const [draft, setDraft] = useState<RegistrationDraft>(createRegistrationDraft)
@@ -86,6 +86,29 @@ export function PokemonRegistrationWizard() {
   const selectedAbility = filteredOptions.abilities.find(
     (ability) => ability.id === draft.abilityId,
   )
+  const selectedTeraType = filteredOptions.battle.teraTypes.find(
+    (teraType) => teraType.id === draft.teraTypeId,
+  )
+  const selectedNature = options.natures.find(
+    (nature) => nature.id === draft.effectiveNatureId,
+  )
+  const natureAdjustment = effectiveNatureAdjustment(
+    draft.effectiveNatureId,
+    selectedNature,
+  )
+  const actualStats: OwnedPokemonStatResult = natureAdjustment === undefined
+    ? {
+        status: 'unavailable',
+        reasonKo: '성격 보정 정보가 불완전하여 실제 능력치를 계산할 수 없습니다.',
+      }
+    : calculateOwnedPokemonStats({
+        baseStats: filteredOptions.battle.baseStats,
+        effectiveIv: draft.effectiveIv,
+        ev: draft.ev,
+        level: draft.level,
+        nature: natureAdjustment,
+        hpRule: filteredOptions.battle.hpRule,
+      })
   const currentMoveIds = new Set(draft.currentMoves.map((move) => move.moveId))
   const targetMoveIds = new Set(draft.targetMoves.map((move) => move.moveId))
   const serializedDraft = JSON.stringify(draft)
@@ -111,7 +134,10 @@ export function PokemonRegistrationWizard() {
       )
       if (!mounted.current || requestVersion.current !== version) return
       setDraft((current) => current.speciesId === speciesId && current.formId === formId
-        ? reconcileFilteredSelections(current, loadedOptions)
+        ? reconcileBattleSelections(
+            reconcileFilteredSelections(current, loadedOptions),
+            loadedOptions.battle,
+          )
         : current)
       setFilteredOptions(loadedOptions)
       setFilterStatus('loaded')
@@ -245,9 +271,9 @@ export function PokemonRegistrationWizard() {
   }
 
   const filterStatusMessage = filterStatus === 'loading'
-    ? '특성과 기술을 불러오는 중입니다.'
+    ? '특성·기술·테라타입·거다이맥스 정보를 불러오는 중입니다.'
     : filterStatus === 'error'
-      ? '특성과 기술을 불러오지 못했습니다. 종과 모습을 다시 선택해 주세요.'
+      ? '특성·기술·테라타입·거다이맥스 정보를 불러오지 못했습니다. 종과 모습을 다시 선택해 주세요.'
       : ''
   const filterBlocked = Boolean(draft.speciesId && draft.formId)
     && filterStatus !== 'loaded'
@@ -343,30 +369,62 @@ export function PokemonRegistrationWizard() {
             {filterStatus === 'loaded' && filteredOptions.abilities.length === 0
               ? <p role="status" aria-live="polite">선택한 모습에 등록된 특성이 없습니다.</p>
               : null}
+            <PokemonBattleFields
+              teraTypes={filteredOptions.battle.teraTypes}
+              teraTypeId={draft.teraTypeId}
+              canGigantamax={filteredOptions.battle.canGigantamax}
+              hasGigantamaxFactor={draft.hasGigantamaxFactor}
+              disabled={filterBlocked}
+              idPrefix="registration-battle"
+              onTeraTypeChange={(teraTypeId) => update({ teraTypeId })}
+              onGigantamaxFactorChange={(hasGigantamaxFactor) => update({
+                hasGigantamaxFactor,
+              })}
+            />
           </>
         ) : null}
         {draft.step === 4 ? (
-          <div className="stat-grid">
-            {statKeys.map((key) => (
-              <div key={key}>
-                <strong>{statLabels[key]}</strong>
-                <label htmlFor={`original-${key}`}>원본 IV</label>
-                <input id={`original-${key}`} type="number" min={0} max={31} value={draft.originalIv[key]} onChange={(event) => update({ originalIv: { ...draft.originalIv, [key]: Number(event.target.value) } })} />
-                <label htmlFor={`effective-${key}`}>실전 IV</label>
-                <input id={`effective-${key}`} type="number" min={draft.originalIv[key]} max={31} value={draft.effectiveIv[key]} onChange={(event) => update({ effectiveIv: { ...draft.effectiveIv, [key]: Number(event.target.value) } })} />
-              </div>
-            ))}
-          </div>
+          <>
+            <StatGlossary />
+            <div className="stat-grid">
+              {statKeys.map((key) => (
+                <div key={key}>
+                  <strong>{statLabels[key]}</strong>
+                  <label htmlFor={`base-${key}`}>{statLabels[key]} 종족값</label>
+                  <input
+                    id={`base-${key}`}
+                    type="number"
+                    value={filteredOptions.battle.baseStats?.[key] ?? ''}
+                    readOnly
+                  />
+                  <label htmlFor={`original-${key}`}>원본 {statLabels[key]} IV</label>
+                  <input id={`original-${key}`} type="number" min={0} max={31} value={draft.originalIv[key]} onChange={(event) => update({ originalIv: { ...draft.originalIv, [key]: Number(event.target.value) } })} />
+                  <label htmlFor={`effective-${key}`}>실전 {statLabels[key]} IV</label>
+                  <input id={`effective-${key}`} type="number" min={draft.originalIv[key]} max={31} value={draft.effectiveIv[key]} onChange={(event) => update({ effectiveIv: { ...draft.effectiveIv, [key]: Number(event.target.value) } })} />
+                </div>
+              ))}
+            </div>
+          </>
         ) : null}
         {draft.step === 5 ? (
-          <div className="stat-grid">
-            {statKeys.map((key) => (
-              <div key={key}>
-                <label htmlFor={`ev-${key}`}><strong>{statLabels[key]} EV</strong></label>
-                <input id={`ev-${key}`} type="number" min={0} max={252} value={draft.ev[key]} onChange={(event) => update({ ev: { ...draft.ev, [key]: Number(event.target.value) } })} />
-              </div>
-            ))}
-          </div>
+          <>
+            <div className="stat-grid">
+              {statKeys.map((key) => (
+                <div key={key}>
+                  <label htmlFor={`ev-${key}`}><strong>{statLabels[key]} EV</strong></label>
+                  <input id={`ev-${key}`} type="number" min={0} max={252} value={draft.ev[key]} onChange={(event) => update({ ev: { ...draft.ev, [key]: Number(event.target.value) } })} />
+                </div>
+              ))}
+            </div>
+            <PokemonStatTable
+              baseStats={filteredOptions.battle.baseStats}
+              originalIv={draft.originalIv}
+              effectiveIv={draft.effectiveIv}
+              ev={draft.ev}
+              actualStats={actualStats}
+              caption="등록 중 능력치"
+            />
+          </>
         ) : null}
         {draft.step === 6 ? (
           <>
@@ -418,8 +476,39 @@ export function PokemonRegistrationWizard() {
             <strong>{draft.nickname || selectedSpecies?.nameKo || '이름 없음'}</strong>
             <span>{selectedSpecies?.nameKo} · Lv. {draft.level}</span>
             <p>특성: {selectedAbility?.nameKo ?? '미지정'}</p>
-            <p>현재 기술: {selectedMoveNames(draft.currentMoves, filteredOptions.moves)}</p>
-            <p>목표 기술: {selectedMoveNames(draft.targetMoves, filteredOptions.moves)}</p>
+            <PokemonBattleBadges
+              teraTypeNameKo={selectedTeraType?.nameKo ?? null}
+              hasGigantamaxFactor={draft.hasGigantamaxFactor}
+            />
+            <PokemonStatTable
+              baseStats={filteredOptions.battle.baseStats}
+              originalIv={draft.originalIv}
+              effectiveIv={draft.effectiveIv}
+              ev={draft.ev}
+              actualStats={actualStats}
+              caption="최종 능력치"
+            />
+            {draft.currentMoves.map((selected, index) => {
+              const move = filteredOptions.moves.find((option) => option.id === selected.moveId)
+              return move ? (
+                <PokemonMoveCard
+                  key={`summary-current-${selected.moveId}`}
+                  move={move}
+                  heading={`현재 기술 ${index + 1}`}
+                />
+              ) : null
+            })}
+            {draft.targetMoves.map((selected, index) => {
+              const move = filteredOptions.moves.find((option) => option.id === selected.moveId)
+              return move ? (
+                <PokemonMoveCard
+                  key={`summary-target-${selected.moveId}`}
+                  move={move}
+                  heading={`목표 기술 ${index + 1}`}
+                  conditionKo={selected.conditionKo}
+                />
+              ) : null
+            })}
             <p>개인 이미지는 다음 단계에서 비공개 업로드로 지원됩니다.</p>
           </div>
         ) : null}
@@ -439,4 +528,20 @@ export function PokemonRegistrationWizard() {
       </div>
     </section>
   )
+}
+
+function effectiveNatureAdjustment(
+  effectiveNatureId: string | null,
+  nature: OwnedPokemonEditOptions['natures'][number] | undefined,
+): NatureAdjustment | null | undefined {
+  if (effectiveNatureId === null) return null
+  if (
+    !nature
+    || !Object.hasOwn(nature, 'increasedStat')
+    || !Object.hasOwn(nature, 'decreasedStat')
+  ) return undefined
+  return {
+    increased: nature.increasedStat,
+    decreased: nature.decreasedStat,
+  }
 }

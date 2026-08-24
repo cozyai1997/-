@@ -19,6 +19,7 @@ const {
   listPokemonFilteredOptions,
   createOwnedPokemon,
   refreshSession,
+  getUser,
 } = vi.hoisted(() => ({
   replace: vi.fn(),
   refresh: vi.fn(),
@@ -26,6 +27,7 @@ const {
   listPokemonFilteredOptions: vi.fn(),
   createOwnedPokemon: vi.fn(),
   refreshSession: vi.fn(),
+  getUser: vi.fn(),
 }))
 
 vi.mock('next/navigation', () => ({
@@ -33,7 +35,7 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('@/lib/supabase/client', () => ({
-  createClient: () => ({ auth: { getUser: vi.fn(), refreshSession } }),
+  createClient: () => ({ auth: { getUser, refreshSession } }),
 }))
 
 vi.mock('@/features/owned-pokemon/repository', async (importOriginal) => {
@@ -72,10 +74,16 @@ const editOptions: OwnedPokemonEditOptions = {
   items: [{ id: 'item-water', nameKo: '신비의물방울' }],
 }
 
-const standardBattle = {
+const capableBattle = {
   baseStats: { hp: 65, attack: 65, defense: 60, special_attack: 110, special_defense: 95, speed: 130 },
   hpRule: 'standard' as const,
   teraTypes: [{ id: 'tera-water', nameKo: '물' }],
+  canGigantamax: true,
+}
+
+const ineligibleWaveBattle = {
+  ...capableBattle,
+  teraTypes: [{ id: 'tera-ice', nameKo: '얼음' }],
   canGigantamax: false,
 }
 
@@ -109,11 +117,11 @@ const waterOptions: PokemonFilteredOptions = {
       damageClassKo: '특수',
       power: 90,
       accuracy: 100,
-      pp: 10,
+      pp: null,
       routes: [{ methodKo: '기술머신', conditionKo: '기술머신 135로 습득' }],
     },
   ],
-  battle: standardBattle,
+  battle: capableBattle,
 }
 
 const waveOptions: PokemonFilteredOptions = {
@@ -124,7 +132,7 @@ const waveOptions: PokemonFilteredOptions = {
     isHidden: false,
   }],
   moves: waterOptions.moves,
-  battle: standardBattle,
+  battle: ineligibleWaveBattle,
 }
 
 const electricOptions: PokemonFilteredOptions = {
@@ -145,13 +153,19 @@ const electricOptions: PokemonFilteredOptions = {
     pp: 15,
     routes: [{ methodKo: '기술머신', conditionKo: '기술머신 126으로 습득' }],
   }],
-  battle: standardBattle,
+  battle: {
+    ...capableBattle,
+    teraTypes: [{ id: 'tera-electric', nameKo: '전기' }],
+    canGigantamax: false,
+  },
 }
 
 describe('포켓몬 등록 필터 선택 UI', () => {
   beforeEach(() => {
     sessionStorage.clear()
     refreshSession.mockResolvedValue({ error: null })
+    getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+    createOwnedPokemon.mockResolvedValue({ id: 'owned-1' })
     listOwnedPokemonEditOptions.mockResolvedValue(editOptions)
     listPokemonFilteredOptions.mockImplementation(
       async (_client: unknown, _speciesId: string, formId: string) => {
@@ -263,13 +277,101 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     })
   })
 
+  it('일곱 단계를 거쳐 전투 선택, 능력치, 기술 PP를 확인하고 초안 전체를 등록한다', async () => {
+    const user = userEvent.setup()
+    render(<PokemonRegistrationWizard />)
+
+    await user.selectOptions(await screen.findByLabelText('포켓몬 종'), 'species-water')
+    await waitFor(() => expect(screen.getByRole('button', { name: '다음' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: '다음' }))
+
+    await user.clear(screen.getByLabelText('레벨'))
+    await user.type(screen.getByLabelText('레벨'), '50')
+    await user.click(screen.getByRole('button', { name: '다음' }))
+
+    await user.selectOptions(screen.getByLabelText('현재 성격'), 'nature-jolly')
+    await user.selectOptions(screen.getByLabelText('특성', { exact: true }), 'ability-water')
+    const teraType = screen.getByRole('combobox', { name: '테라타입' })
+    expect(screen.getAllByRole('option', { name: '물' })).toHaveLength(1)
+    expect(screen.queryByText('tera-water')).not.toBeInTheDocument()
+    await user.selectOptions(teraType, 'tera-water')
+    const gigantamax = screen.getByRole('checkbox', { name: '거다이맥스 인자 보유' })
+    expect(gigantamax).toBeEnabled()
+    expect(screen.getByText('거다이맥스 가능')).toBeVisible()
+    await user.click(gigantamax)
+    await user.click(screen.getByRole('button', { name: '다음' }))
+
+    expect(screen.getByText('종족값 Base Stats')).toBeVisible()
+    expect(screen.getByText('그 포켓몬 종과 폼 자체가 가진 기본 능력치')).toBeVisible()
+    expect(screen.getByText('개체값 IV')).toBeVisible()
+    expect(screen.getByText('태어날 때 정해지는 0~31 수치')).toBeVisible()
+    expect(screen.getByText('노력치 EV')).toBeVisible()
+    expect(screen.getByText('전투나 아이템으로 올리는 훈련 수치, 능력치당 최대 252')).toBeVisible()
+    expect(screen.getByText('실제 능력치 Stats')).toBeVisible()
+    expect(screen.getByText('현재 레벨에서 실제 전투에 적용되는 HP·공격·방어·특공·특방·스피드 숫자')).toBeVisible()
+    expect(screen.getByLabelText('HP 종족값')).toHaveValue(65)
+    expect(screen.getByLabelText('HP 종족값')).toHaveAttribute('readonly')
+    expect(screen.getByLabelText('원본 HP IV')).toBeEnabled()
+    expect(screen.getByLabelText('실전 HP IV')).toBeEnabled()
+    await user.clear(screen.getByLabelText('실전 스피드 IV'))
+    await user.type(screen.getByLabelText('실전 스피드 IV'), '31')
+    await user.click(screen.getByRole('button', { name: '다음' }))
+
+    await user.clear(screen.getByLabelText('스피드 EV'))
+    await user.type(screen.getByLabelText('스피드 EV'), '252')
+    const liveStats = screen.getByRole('table', { name: '등록 중 능력치' })
+    expect(liveStats).toHaveTextContent('종족값 Base Stats')
+    expect(screen.getByRole('rowheader', { name: '스피드' }).closest('tr'))
+      .toHaveTextContent('스피드130031252200')
+    await user.click(screen.getByRole('button', { name: '다음' }))
+
+    await user.selectOptions(screen.getByLabelText('현재 기술 1'), 'move-surf')
+    await user.selectOptions(screen.getByLabelText('목표 기술 1'), 'move-ice-beam')
+    expect(screen.getByRole('article', { name: '파도타기' })).toHaveTextContent('기본 PP: 15')
+    expect(screen.getByRole('article', { name: '냉동빔' })).toHaveTextContent('기본 PP: 확인 불가')
+    await user.click(screen.getByRole('button', { name: '다음' }))
+
+    expect(screen.getByText('테라타입: 물')).toBeVisible()
+    expect(screen.getByText('거다이맥스 가능')).toBeVisible()
+    expect(screen.getByRole('table', { name: '최종 능력치' })).toBeVisible()
+    expect(screen.getByRole('article', { name: '파도타기' })).toHaveTextContent('현재 기술 1')
+    expect(screen.getByRole('article', { name: '파도타기' })).toHaveTextContent('기본 PP: 15')
+    expect(screen.getByRole('article', { name: '냉동빔' })).toHaveTextContent('목표 기술 1')
+    expect(screen.getByRole('article', { name: '냉동빔' })).toHaveTextContent('기본 PP: 확인 불가')
+
+    await user.click(screen.getByRole('button', { name: '등록 완료' }))
+    await waitFor(() => expect(createOwnedPokemon).toHaveBeenCalledTimes(1))
+    expect(createOwnedPokemon.mock.calls[0]?.[1]).toEqual({
+      step: 7,
+      speciesId: 'species-water',
+      formId: 'form-water',
+      nickname: null,
+      gender: 'genderless',
+      level: 50,
+      capturedOn: null,
+      originalNatureId: null,
+      effectiveNatureId: 'nature-jolly',
+      abilityId: 'ability-water',
+      originalIv: { hp: 0, attack: 0, defense: 0, special_attack: 0, special_defense: 0, speed: 0 },
+      effectiveIv: { hp: 0, attack: 0, defense: 0, special_attack: 0, special_defense: 0, speed: 31 },
+      ev: { hp: 0, attack: 0, defense: 0, special_attack: 0, special_defense: 0, speed: 252 },
+      heldItemId: null,
+      notes: '',
+      teraTypeId: 'tera-water',
+      hasGigantamaxFactor: true,
+      currentMoves: [{ moveId: 'move-surf' }],
+      targetMoves: [{ moveId: 'move-ice-beam', conditionKo: '기술머신 135로 습득' }],
+    })
+    expect(replace).toHaveBeenCalledWith('/my-pokemon')
+  })
+
   it('폼 필터가 성공할 때까지 진행을 막고 유효한 특성과 종별 기술을 유지한다', async () => {
     const user = userEvent.setup()
     let resolveWave: ((value: PokemonFilteredOptions) => void) | undefined
     const retainedWaveOptions: PokemonFilteredOptions = {
       abilities: waterOptions.abilities,
       moves: waterOptions.moves,
-      battle: standardBattle,
+      battle: ineligibleWaveBattle,
     }
     sessionStorage.setItem(registrationDraftKey, JSON.stringify({
       ...createRegistrationDraft(),
@@ -278,6 +380,8 @@ describe('포켓몬 등록 필터 선택 UI', () => {
       abilityId: 'ability-water',
       currentMoves: [{ moveId: 'move-surf' }],
       targetMoves: [{ moveId: 'move-surf', conditionKo: '레벨 40에 습득' }],
+      teraTypeId: 'tera-water',
+      hasGigantamaxFactor: true,
     }))
     listPokemonFilteredOptions.mockImplementation(
       (_client: unknown, _speciesId: string, formId: string) => formId === 'form-wave'
@@ -290,7 +394,9 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '다음' })).toBeEnabled())
     await user.selectOptions(form, 'form-wave')
     expect(screen.getByRole('button', { name: '다음' })).toBeDisabled()
-    expect(screen.getByRole('status')).toHaveTextContent('특성과 기술을 불러오는 중입니다.')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '특성·기술·테라타입·거다이맥스 정보를 불러오는 중입니다.',
+    )
 
     resolveWave?.(retainedWaveOptions)
     await waitFor(() => expect(screen.getByRole('button', { name: '다음' })).toBeEnabled())
@@ -303,8 +409,14 @@ describe('포켓몬 등록 필터 선택 UI', () => {
         abilityId: 'ability-water',
         currentMoves: [{ moveId: 'move-surf' }],
         targetMoves: [{ moveId: 'move-surf', conditionKo: '레벨 40에 습득' }],
+        teraTypeId: null,
+        hasGigantamaxFactor: false,
       })
     })
+    expect(screen.getByRole('combobox', { name: '테라타입' })).toHaveValue('')
+    expect(screen.getByRole('option', { name: '얼음' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: '거다이맥스 인자 보유' })).toBeDisabled()
+    expect(screen.getByText('거다이맥스 불가능')).toBeVisible()
   })
 
   it('폼 필터 오류 뒤에는 다음 단계와 등록 완료를 활성화하지 않는다', async () => {
@@ -321,7 +433,7 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     const submit = await screen.findByRole('button', { name: '등록 완료' })
     expect(submit).toBeDisabled()
     expect(await screen.findByText(
-      '특성과 기술을 불러오지 못했습니다. 종과 모습을 다시 선택해 주세요.',
+      '특성·기술·테라타입·거다이맥스 정보를 불러오지 못했습니다. 종과 모습을 다시 선택해 주세요.',
     )).toBeVisible()
     expect(submit).toBeDisabled()
   })
@@ -380,6 +492,24 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     await waitFor(() => expect(screen.getByLabelText('특성', { exact: true })).toHaveValue(''))
     expect(screen.queryByRole('option', { name: /저수/u })).not.toBeInTheDocument()
     expect(screen.getByRole('option', { name: '촉촉바디' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '얼음' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: '물' })).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: '거다이맥스 인자 보유' })).toBeDisabled()
+  })
+
+  it('선택한 현재 성격이 기준데이터에서 누락되면 중립으로 추정하지 않는다', async () => {
+    sessionStorage.setItem(registrationDraftKey, JSON.stringify({
+      ...createRegistrationDraft(),
+      step: 5,
+      speciesId: 'species-water',
+      formId: 'form-water',
+      effectiveNatureId: 'nature-missing',
+    }))
+    render(<PokemonRegistrationWizard />)
+
+    expect(await screen.findByText(
+      '계산 불가: 성격 보정 정보가 불완전하여 실제 능력치를 계산할 수 없습니다.',
+    )).toBeVisible()
   })
 
   it('늦게 끝난 이전 종의 요청이 최신 종의 선택지를 덮지 못하게 한다', async () => {
@@ -394,7 +524,9 @@ describe('포켓몬 등록 필터 선택 UI', () => {
 
     const species = await screen.findByLabelText('포켓몬 종')
     await user.selectOptions(species, 'species-water')
-    expect(await screen.findByRole('status')).toHaveTextContent('특성과 기술을 불러오는 중입니다.')
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      '특성·기술·테라타입·거다이맥스 정보를 불러오는 중입니다.',
+    )
     await user.selectOptions(species, 'species-electric')
     await waitFor(() => expect(listPokemonFilteredOptions).toHaveBeenCalledTimes(2))
     resolveWater?.(waterOptions)
