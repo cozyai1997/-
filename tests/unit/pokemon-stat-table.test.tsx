@@ -46,7 +46,7 @@ describe('StatGlossary', () => {
     expect(glossary).not.toBeNull()
     expect(within(glossary as HTMLElement).getByText('종족값 Base Stats')).toBeVisible()
     expect(within(glossary as HTMLElement).getByText('그 포켓몬 종과 폼 자체가 가진 기본 능력치')).toBeVisible()
-    expect(within(glossary as HTMLElement).getByText('개체값 IV')).toBeVisible()
+    expect(within(glossary as HTMLElement).getByText('개체값 IV (원본)')).toBeVisible()
     expect(within(glossary as HTMLElement).getByText('태어날 때 정해지는 0~31 수치')).toBeVisible()
     expect(within(glossary as HTMLElement).getByText('노력치 EV')).toBeVisible()
     expect(within(glossary as HTMLElement).getByText('전투나 아이템으로 올리는 훈련 수치, 능력치당 최대 252')).toBeVisible()
@@ -56,7 +56,7 @@ describe('StatGlossary', () => {
 })
 
 describe('PokemonStatTable', () => {
-  it('여섯 능력치에 종족값·원본 IV·실전 IV·EV·실제 능력치 열을 표시한다', () => {
+  it('여섯 능력치에 승인된 종족값·원본 개체값·왕관 보정 적용값·EV·실제 능력치 열을 표시한다', () => {
     render(
       <PokemonStatTable
         baseStats={baseStats}
@@ -89,8 +89,8 @@ describe('PokemonStatTable', () => {
     expect(within(table).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual([
       '능력치',
       '종족값 Base Stats',
-      '원본 IV',
-      '실전 IV',
+      '개체값 IV (원본)',
+      '적용 IV (왕관 보정 포함)',
       '노력치 EV',
       '실제 능력치 Stats',
     ])

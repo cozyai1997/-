@@ -305,12 +305,13 @@ describe('포켓몬 상세 필터 수정', () => {
 
     expect(within(screen.getByLabelText('저장된 전투 설정')).getByText('테라타입: 물')).toBeVisible()
     expect(within(screen.getByLabelText('저장된 전투 설정')).getByText('거다이맥스 인자 보유')).toBeVisible()
+    expect(screen.getByRole('heading', { name: '적용 IV (왕관 보정 포함)' })).toBeVisible()
 
     const table = screen.getByRole('table', { name: '보유 포켓몬 능력치' })
     for (const heading of [
       '종족값 Base Stats',
-      '원본 IV',
-      '실전 IV',
+      '개체값 IV (원본)',
+      '적용 IV (왕관 보정 포함)',
       '노력치 EV',
       '실제 능력치 Stats',
     ]) {
@@ -446,6 +447,7 @@ describe('포켓몬 상세 필터 수정', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '빠른 수정 저장' })).toBeEnabled())
 
     await user.click(screen.getByRole('button', { name: '보호 정보 정정 열기' }))
+    expect(screen.getByLabelText('HP 개체값 IV (원본)')).toBeVisible()
     await user.selectOptions(screen.getByLabelText('정정 포켓몬 종'), 'species-electric')
     await user.type(screen.getByLabelText('정정 사유'), '종 입력 오류를 정정함')
     await waitFor(() => expect(screen.getByRole('button', { name: '정정 저장' })).toBeEnabled())

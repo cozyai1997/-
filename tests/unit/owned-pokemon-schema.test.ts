@@ -35,12 +35,14 @@ describe('보유 포켓몬 입력 검증', () => {
     expect(validateOwnedPokemon(validDraft())).toEqual([])
   })
 
-  it('실전 IV가 원본 IV보다 낮으면 거부한다', () => {
+  it('왕관 보정 적용 IV가 원본 개체값보다 낮으면 승인된 용어로 거부한다', () => {
     const draft = validDraft()
     draft.originalIv = { ...draft.originalIv, hp: 20 }
     draft.effectiveIv = { ...draft.effectiveIv, hp: 19 }
 
-    expect(validateOwnedPokemon(draft)).toContain('실전 IV는 원본 IV 이상 31 이하여야 합니다.')
+    expect(validateOwnedPokemon(draft)).toContain(
+      '적용 IV (왕관 보정 포함)는 개체값 IV (원본) 이상 31 이하여야 합니다.',
+    )
   })
 
   it('EV 총합이 510을 넘으면 거부한다', () => {

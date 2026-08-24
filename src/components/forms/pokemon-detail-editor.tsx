@@ -479,10 +479,10 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
             <label htmlFor="quick-notes">메모</label>
             <textarea id="quick-notes" value={draft.notes} maxLength={4000} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} />
           </div>
-          <h3>실전 IV</h3>
+          <h3>적용 IV (왕관 보정 포함)</h3>
           <div className="compact-stat-grid">
             {statKeys.map((key) => (
-              <label key={key} htmlFor={`quick-iv-${key}`}>{statLabels[key]}
+              <label key={key} htmlFor={`quick-iv-${key}`}>{statLabels[key]} 적용 IV (왕관 보정 포함)
                 <input id={`quick-iv-${key}`} type="number" min={draft.originalIv[key]} max={31} value={draft.effectiveIv[key]} onChange={(event) => setDraft({ ...draft, effectiveIv: { ...draft.effectiveIv, [key]: Number(event.target.value) } })} />
               </label>
             ))}
@@ -512,7 +512,7 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
 
       <section className="detail-panel protected-panel" aria-labelledby="protected-title">
         <h2 id="protected-title">보호 정보</h2>
-        <p>종·모습·원본 IV·포획 정보는 사유와 확인 절차를 거쳐야 정정할 수 있습니다.</p>
+        <p>종·모습·개체값 IV (원본)·포획 정보는 사유와 확인 절차를 거쳐야 정정할 수 있습니다.</p>
         <button type="button" className="secondary-button" onClick={toggleCorrection}>보호 정보 정정 열기</button>
         {correctionOpen ? (
           <div className="correction-form">
@@ -528,7 +528,7 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
             <input id="correction-captured-on" type="date" value={correction.capturedOn ?? ''} onChange={(event) => setCorrection({ ...correction, capturedOn: event.target.value || null })} />
             <div className="compact-stat-grid">
               {statKeys.map((key) => (
-                <label key={key} htmlFor={`correction-iv-${key}`}>{statLabels[key]} 원본 IV
+                <label key={key} htmlFor={`correction-iv-${key}`}>{statLabels[key]} 개체값 IV (원본)
                   <input id={`correction-iv-${key}`} type="number" min={0} max={correction.effectiveIv[key]} value={correction.originalIv[key]} onChange={(event) => setCorrection({ ...correction, originalIv: { ...correction.originalIv, [key]: Number(event.target.value) } })} />
                 </label>
               ))}

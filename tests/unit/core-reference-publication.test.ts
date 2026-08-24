@@ -73,7 +73,7 @@ const dataset: ReferenceDataset = {
   natures: [{ id: 'hardy', nameKo: '노력', increasedStat: null, decreasedStat: null }],
   teraTypes: [
     { id: 'normal', nameKo: '노말', referenceTypeId: 'normal', sortOrder: 0 },
-    { id: 'stellar', nameKo: '스텔라', referenceTypeId: null, sortOrder: 19 },
+    { id: 'stellar', nameKo: '스텔라', referenceTypeId: null, sortOrder: 18 },
   ],
   formTeraOptions: [
     { formId: 'eevee-normal', teraTypeId: 'normal' },

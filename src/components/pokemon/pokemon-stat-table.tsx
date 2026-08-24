@@ -40,8 +40,8 @@ export function PokemonStatTable({
           <tr>
             <th scope="col">능력치</th>
             <th scope="col">종족값 Base Stats</th>
-            <th scope="col">원본 IV</th>
-            <th scope="col">실전 IV</th>
+            <th scope="col">개체값 IV (원본)</th>
+            <th scope="col">적용 IV (왕관 보정 포함)</th>
             <th scope="col">노력치 EV</th>
             <th scope="col">실제 능력치 Stats</th>
           </tr>

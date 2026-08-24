@@ -35,7 +35,7 @@ import {
 import type { NatureAdjustment } from '@/features/stats/types'
 
 const stepTitles = [
-  '종·모습', '기본 정보', '성격·특성', '원본·실전 IV', 'EV',
+  '종·모습', '기본 정보', '성격·특성', '개체값 IV (원본)·적용 IV (왕관 보정 포함)', 'EV',
   '현재·목표 기술', '이미지·최종 확인',
 ]
 
@@ -397,9 +397,9 @@ export function PokemonRegistrationWizard() {
                     value={filteredOptions.battle.baseStats?.[key] ?? ''}
                     readOnly
                   />
-                  <label htmlFor={`original-${key}`}>원본 {statLabels[key]} IV</label>
+                  <label htmlFor={`original-${key}`}>{statLabels[key]} 개체값 IV (원본)</label>
                   <input id={`original-${key}`} type="number" min={0} max={31} value={draft.originalIv[key]} onChange={(event) => update({ originalIv: { ...draft.originalIv, [key]: Number(event.target.value) } })} />
-                  <label htmlFor={`effective-${key}`}>실전 {statLabels[key]} IV</label>
+                  <label htmlFor={`effective-${key}`}>{statLabels[key]} 적용 IV (왕관 보정 포함)</label>
                   <input id={`effective-${key}`} type="number" min={draft.originalIv[key]} max={31} value={draft.effectiveIv[key]} onChange={(event) => update({ effectiveIv: { ...draft.effectiveIv, [key]: Number(event.target.value) } })} />
                 </div>
               ))}

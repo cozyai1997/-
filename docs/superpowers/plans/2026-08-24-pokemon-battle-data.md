@@ -33,7 +33,7 @@
 - `supabase/migrations/20260824123000_pokemon_battle_data.sql`: 새 기준 테이블·열·RLS·트리거·게시 RPC·보유 포켓몬 RPC.
 - `src/features/stats/calculate-owned-pokemon-stats.ts`: 폼/성격 데이터의 완전성 검사와 보유 개체 능력치 계산 결과 생성.
 - `src/components/pokemon/stat-glossary.tsx`: 승인된 네 용어 설명.
-- `src/components/pokemon/pokemon-stat-table.tsx`: 종족값·원본/적용 IV·EV·실제 능력치 표.
+- `src/components/pokemon/pokemon-stat-table.tsx`: 종족값 Base Stats·개체값 IV (원본)·적용 IV (왕관 보정 포함)·노력치 EV·실제 능력치 Stats 표.
 - `src/components/pokemon/pokemon-battle-fields.tsx`: 테라타입과 거다이맥스 인자 입력.
 - `src/components/pokemon/pokemon-battle-badges.tsx`: 목록·상세의 한국어 배지.
 - `src/components/pokemon/pokemon-move-card.tsx`: 기술 정보와 기본 PP 표시.
@@ -158,7 +158,7 @@
 
 - [ ] **Step 4: Extend the importer**
 
-  Read `FormEN`, six `Base*` columns, `BattleOnly`, and each species JSON once. Build each normal form from the top-level JSON stats and empty aspects; match all 473 derived CSV rows to raw JSON by `FormEN === forms[].name`. Reject a CSV/raw battle-only disagreement, then resolve stats before building Tera and Gmax rows. Map Stellar to `{ id: 'stellar', nameKo: '스텔라', referenceTypeId: null, sortOrder: 19 }` without adding it to `types` or `typeMatchups`.
+  Read `FormEN`, six `Base*` columns, `BattleOnly`, and each species JSON once. Build each normal form from the top-level JSON stats and empty aspects; match all 473 derived CSV rows to raw JSON by `FormEN === forms[].name`. Reject a CSV/raw battle-only disagreement, then resolve stats before building Tera and Gmax rows. Map Stellar to `{ id: 'stellar', nameKo: '스텔라', referenceTypeId: null, sortOrder: 18 }` without adding it to `types` or `typeMatchups`; the 19 Tera rows use canonical zero-based orders `0..18`.
 
 - [ ] **Step 5: Run the focused tests and verify GREEN**
 
@@ -510,7 +510,7 @@
 
   ```text
   종족값 Base Stats: 그 포켓몬 종과 폼 자체가 가진 기본 능력치
-  개체값 IV: 태어날 때 정해지는 0~31 수치
+  개체값 IV (원본): 태어날 때 정해지는 0~31 수치
   노력치 EV: 전투나 아이템으로 올리는 훈련 수치, 능력치당 최대 252
   실제 능력치 Stats: 현재 레벨에서 실제 전투에 적용되는 HP·공격·방어·특공·특방·스피드 숫자
   ```
@@ -1251,7 +1251,7 @@
   }
   ```
 
-  Never run Playwright/local E2E with production Supabase variables. Open only the exact immutable `$stagedDeploymentUrl`, never the canonical alias, and confirm the target string before creating data. Generate a nonce first, enter an exact disposable email containing that nonce, and create only that account in the staged app after `$smokeStartedAt` is recorded. Manually verify the seven-step flow, list/detail, Tera/Gmax, stats, and PP. Do not paste an auth or Pokémon UUID: the service-role cleanup resolves the exact email, verifies its creation time, and reads its owned Pokémon IDs before any deletion. Set `$smokeFlowPassed = 'passed'` only after every UI check succeeds.
+  Never run Playwright/local E2E with production Supabase variables. Open only the exact immutable `$stagedDeploymentUrl`, never the canonical alias, and confirm the target string before creating data. Generate a nonce first, enter an exact disposable email containing that nonce, and create only that account in the staged app after `$smokeStartedAt` is recorded. The operator must complete every item in `$requiredSmokeEvidence` against one Pikachu smoke record; a single undifferentiated confirmation is forbidden. Each item records its assertion, exact confirmation token, UTC timestamp, and `passed` result in `$smokeEvidence`, which is included in final release evidence. Do not paste an auth or Pokémon UUID: the service-role cleanup resolves the exact email, verifies its creation time, and reads its owned Pokémon IDs before any deletion. Set `$smokeFlowPassed = 'passed'` only after every item succeeds.
 
   Before server cleanup, sign out the disposable session and clear its browser cookies/local storage because deleting an auth user does not revoke an already-issued JWT. Confirm that separately from the UI checks. The service-role client recursively enumerates only the server-verified `<smoke-user-uuid>/` prefix inside `private-pokemon-images`, removes the returned paths, hard-deletes that auth user so FK cascades finish, and only then deletes audit rows for that exact UUID. It never deletes `storage.objects` directly. Cleanup/API/temp-file failures are collected so the six-category residue query still runs whenever the authenticated identity was resolved; if no identity can be authenticated, stop without deleting any user. Flow and browser assertions run only after cleanup and proof:
 
@@ -1261,6 +1261,41 @@
   Assert-CanonicalDeployment $previousDeploymentId
   $smokeFlowPassed = 'not-passed'
   $smokeBrowserCleared = 'not-cleared'
+  $requiredSmokeEvidence = @(
+    [ordered]@{
+      key = 'sevenStepSave'
+      assertion = '피카츄(도감번호 #0025, 일반)를 7단계에서 정확히 한 마리 저장하고 목록·상세에 같은 값이 표시됨'
+    },
+    [ordered]@{
+      key = 'koreanAndPublicIdentity'
+      assertion = '종·모습·특성·기술은 한국어만 표시되고 도감번호 #0025가 보이며 UUID·pikachu-normal·그 밖의 내부 form ID가 보이지 않음'
+    },
+    [ordered]@{
+      key = 'abilityFiltering'
+      assertion = '피카츄 특성에는 정전기·피뢰침만 허용되고 맹화는 선택지·목록·상세에 없음'
+    },
+    [ordered]@{
+      key = 'moveFilteringAndPp'
+      assertion = '피카츄 기술에는 10만볼트가 허용되고 화염방사는 없으며 선택·최종·상세에 기본 PP: 15가 정확히 표시됨'
+    },
+    [ordered]@{
+      key = 'statTermsAndValues'
+      assertion = '레벨 50·성실·개체값 IV (원본) 31·적용 IV (왕관 보정 포함) 31·노력치 EV 0에서 표의 HP/공격/방어/특수공격/특수방어/스피드가 각각 35/31/31/0/110, 55/31/31/0/75, 40/31/31/0/60, 50/31/31/0/70, 50/31/31/0/70, 90/31/31/0/110이고, glossary 네 쌍은 종족값 Base Stats: 그 포켓몬 종과 폼 자체가 가진 기본 능력치; 개체값 IV (원본): 태어날 때 정해지는 0~31 수치; 노력치 EV: 전투나 아이템으로 올리는 훈련 수치, 능력치당 최대 252; 실제 능력치 Stats: 현재 레벨에서 실제 전투에 적용되는 HP·공격·방어·특공·특방·스피드 숫자임'
+    },
+    [ordered]@{
+      key = 'teraAndGigantamax'
+      assertion = '전기 테라타입과 거다이맥스 인자를 저장하고 목록·최종·상세에 테라타입: 전기 및 거다이맥스 인자 보유가 표시됨'
+    },
+    [ordered]@{
+      key = 'privateImageLifecycle'
+      assertion = 'private image upload/read/delete를 수행해 업로드 후 목록·상세에서 같은 비공개 이미지를 읽고 등록 이미지 삭제 후 이미지가 다시 노출되지 않음'
+    },
+    [ordered]@{
+      key = 'browserErrors'
+      assertion = 'DevTools Preserve log 기준 smoke 시작부터 종료까지 uncaught console error 0건·실패 network 0건'
+    }
+  )
+  $smokeEvidence = [ordered]@{}
   $openedSmokeTarget = (Read-Host "브라우저에서 정확히 $stagedDeploymentUrl 을 열었다면 해당 URL을 다시 입력").TrimEnd('/')
   if ($openedSmokeTarget -ne $stagedDeploymentUrl) {
     throw 'smoke 브라우저 대상이 staged deployment URL과 다릅니다.'
@@ -1275,8 +1310,23 @@
   $cleanupRows = @()
   try {
     # 지금부터 $stagedDeploymentUrl 앱에서 위 email로 계정 하나만 만들고 정확히 한 마리를 저장·검증한다.
-    $smokeConfirmation = (Read-Host '7단계/목록/상세/Tera/Gmax/stats/PP를 모두 확인했다면 VERIFIED 입력').Trim()
-    if ($smokeConfirmation -cne 'VERIFIED') { throw 'production smoke 수동 검증이 완료되지 않았습니다.' }
+    foreach ($requirement in $requiredSmokeEvidence) {
+      $expectedToken = "PASS:$($requirement.key)"
+      $confirmation = (Read-Host "[$($requirement.key)] $($requirement.assertion)`n확인 후 정확히 $expectedToken 입력").Trim()
+      if ($confirmation -cne $expectedToken) {
+        throw "production smoke 항목 검증 실패: $($requirement.key)"
+      }
+      $smokeEvidence[$requirement.key] = [ordered]@{
+        assertion = $requirement.assertion
+        confirmation = $expectedToken
+        result = 'passed'
+        verifiedAt = [DateTimeOffset]::UtcNow.ToString('o')
+      }
+    }
+    if ($smokeEvidence.Count -ne $requiredSmokeEvidence.Count -or
+        @($smokeEvidence.Values | Where-Object { $_.result -ne 'passed' }).Count -ne 0) {
+      throw 'production smoke 항목별 증거가 완전하지 않습니다.'
+    }
     $smokeFlowPassed = 'passed'
     $browserConfirmation = (Read-Host 'sign-out 후 해당 사이트 cookie/local storage를 지웠다면 SIGNED_OUT_AND_CLEARED 입력').Trim()
     if ($browserConfirmation -cne 'SIGNED_OUT_AND_CLEARED') { throw 'disposable browser session 정리가 확인되지 않았습니다.' }
@@ -1452,6 +1502,8 @@
     if ($cleanupErrors.Count) { throw ($cleanupErrors -join '; ') }
   }
   if ($smokeFlowPassed -ne 'passed' -or $smokeBrowserCleared -ne 'cleared' -or
+      $smokeEvidence.Count -ne $requiredSmokeEvidence.Count -or
+      @($smokeEvidence.Values | Where-Object { $_.result -ne 'passed' }).Count -ne 0 -or
       @($verifiedSmokePokemonIds).Count -ne 1 -or $cleanupRows.Count -ne 1 -or
       @('auth_users','owned','moves','images','audit','storage').Where({
         [int]$cleanupRows[0].PSObject.Properties[$_].Value -ne 0
@@ -1485,6 +1537,8 @@
       throw 'promotion 직전 staged deployment 인증 실패'
     }
     if ($smokeFlowPassed -ne 'passed' -or $smokeBrowserCleared -ne 'cleared' -or
+        $smokeEvidence.Count -ne $requiredSmokeEvidence.Count -or
+        @($smokeEvidence.Values | Where-Object { $_.result -ne 'passed' }).Count -ne 0 -or
         @($verifiedSmokePokemonIds).Count -ne 1 -or $cleanupRows.Count -ne 1 -or
         @('auth_users','owned','moves','images','audit','storage').Where({
           [int]$cleanupRows[0].PSObject.Properties[$_].Value -ne 0
@@ -1592,6 +1646,8 @@
   })
   if ($cleanupRows.Count -ne 1 -or $finalRlsCatalogPostflight -ne 'passed' -or
       $finalRlsPostflight -ne 'passed' -or $smokeFlowPassed -ne 'passed' -or
+      $smokeEvidence.Count -ne $requiredSmokeEvidence.Count -or
+      @($smokeEvidence.Values | Where-Object { $_.result -ne 'passed' }).Count -ne 0 -or
       $smokeBrowserCleared -ne 'cleared' -or @($verifiedSmokePokemonIds).Count -ne 1 -or
       $stagedDeploymentId -ne $promotedDeploymentId -or $finalCanonical.id -ne $promotedDeploymentId -or
       $finalCanonical.url -ne $stagedUri.Host -or $finalCanonical.target -ne 'production' -or
@@ -1637,6 +1693,7 @@
     deploymentState=$finalDeployment.readyState
     deploymentReleaseCommit=$finalDeployment.meta.releaseCommit
     smokeFlow=$smokeFlowPassed
+    smokeEvidence=$smokeEvidence
     smokeCleanup=$finalCleanupRows[0]
   }
   $evidencePath = ".reference-data/release-evidence-$releaseSha.json"

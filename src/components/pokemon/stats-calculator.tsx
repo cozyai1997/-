@@ -131,14 +131,14 @@ export function StatsCalculator() {
         <p>같은 능력치를 선택하면 보정 없는 성격으로 계산합니다.</p>
       </div>
 
-      <div className="stats-input-grid" role="group" aria-label="종족값 IV EV 입력">
+      <div className="stats-input-grid" role="group" aria-label="종족값 Base Stats·적용 IV (왕관 보정 포함)·노력치 EV 입력">
         {statKeys.map((key) => (
           <fieldset key={key}>
             <legend>{labels[key]}</legend>
             <label htmlFor={`base-${key}`}>{labels[key]} 종족값
               <input id={`base-${key}`} type="number" min={1} max={255} value={input.baseStats[key]} onChange={(event) => updateBlock('baseStats', key, Number(event.target.value))} />
             </label>
-            <label htmlFor={`iv-${key}`}>{labels[key]} IV
+            <label htmlFor={`iv-${key}`}>{labels[key]} 적용 IV (왕관 보정 포함)
               <input id={`iv-${key}`} type="number" min={0} max={31} value={input.iv[key]} onChange={(event) => updateBlock('iv', key, Number(event.target.value))} />
             </label>
             <label htmlFor={`ev-${key}`}>{labels[key]} EV
@@ -161,7 +161,7 @@ export function StatsCalculator() {
       {result ? <div className="stats-result-panel">
         <h2>계산 결과</h2>
         <table>
-          <thead><tr><th>능력치</th><th>종족값</th><th>IV</th><th>EV</th><th>실제 능력치 Stats</th></tr></thead>
+          <thead><tr><th>능력치</th><th>종족값 Base Stats</th><th>적용 IV (왕관 보정 포함)</th><th>노력치 EV</th><th>실제 능력치 Stats</th></tr></thead>
           <tbody>
             {statKeys.map((key) => (
               <tr key={key}>

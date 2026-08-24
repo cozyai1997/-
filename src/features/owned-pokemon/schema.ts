@@ -50,11 +50,11 @@ export function validateOwnedPokemon(input: OwnedPokemonInput) {
 
   for (const key of statKeys) {
     if (input.originalIv[key] < 0 || input.originalIv[key] > 31) {
-      errors.push('원본 IV는 0부터 31 사이여야 합니다.')
+      errors.push('개체값 IV (원본)는 0부터 31 사이여야 합니다.')
       break
     }
     if (input.effectiveIv[key] < input.originalIv[key] || input.effectiveIv[key] > 31) {
-      errors.push('실전 IV는 원본 IV 이상 31 이하여야 합니다.')
+      errors.push('적용 IV (왕관 보정 포함)는 개체값 IV (원본) 이상 31 이하여야 합니다.')
       break
     }
     if (input.ev[key] < 0 || input.ev[key] > 252) {

@@ -303,7 +303,7 @@ describe('포켓몬 등록 필터 선택 UI', () => {
 
     expect(screen.getByText('종족값 Base Stats')).toBeVisible()
     expect(screen.getByText('그 포켓몬 종과 폼 자체가 가진 기본 능력치')).toBeVisible()
-    expect(screen.getByText('개체값 IV')).toBeVisible()
+    expect(screen.getByText('개체값 IV (원본)')).toBeVisible()
     expect(screen.getByText('태어날 때 정해지는 0~31 수치')).toBeVisible()
     expect(screen.getByText('노력치 EV')).toBeVisible()
     expect(screen.getByText('전투나 아이템으로 올리는 훈련 수치, 능력치당 최대 252')).toBeVisible()
@@ -311,10 +311,10 @@ describe('포켓몬 등록 필터 선택 UI', () => {
     expect(screen.getByText('현재 레벨에서 실제 전투에 적용되는 HP·공격·방어·특공·특방·스피드 숫자')).toBeVisible()
     expect(screen.getByLabelText('HP 종족값')).toHaveValue(65)
     expect(screen.getByLabelText('HP 종족값')).toHaveAttribute('readonly')
-    expect(screen.getByLabelText('원본 HP IV')).toBeEnabled()
-    expect(screen.getByLabelText('실전 HP IV')).toBeEnabled()
-    await user.clear(screen.getByLabelText('실전 스피드 IV'))
-    await user.type(screen.getByLabelText('실전 스피드 IV'), '31')
+    expect(screen.getByLabelText('HP 개체값 IV (원본)')).toBeEnabled()
+    expect(screen.getByLabelText('HP 적용 IV (왕관 보정 포함)')).toBeEnabled()
+    await user.clear(screen.getByLabelText('스피드 적용 IV (왕관 보정 포함)'))
+    await user.type(screen.getByLabelText('스피드 적용 IV (왕관 보정 포함)'), '31')
     await user.click(screen.getByRole('button', { name: '다음' }))
 
     await user.clear(screen.getByLabelText('스피드 EV'))

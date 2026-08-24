@@ -6,7 +6,7 @@ export function StatGlossary() {
         <dd>그 포켓몬 종과 폼 자체가 가진 기본 능력치</dd>
       </div>
       <div>
-        <dt>개체값 IV</dt>
+        <dt>개체값 IV (원본)</dt>
         <dd>태어날 때 정해지는 0~31 수치</dd>
       </div>
       <div>
