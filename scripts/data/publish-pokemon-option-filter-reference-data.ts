@@ -5,7 +5,10 @@ import { pathToFileURL } from 'node:url'
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
-import type { ReferenceDataset } from '../../src/features/localization/reference-data-validation'
+import {
+  collectBattleDataIssues,
+  type ReferenceDataset,
+} from '../../src/features/localization/reference-data-validation'
 
 const batchSize = 750
 const hangulPattern = /[ㄱ-ㅎㅏ-ㅣ가-힣]/u
@@ -230,13 +233,8 @@ export function assertOptionFilterCandidate(dataset: ReferenceDataset): void {
     assertResolvedIdentifier(formIds, option.formId, `formTeraOptions:${option.formId}:formId`)
     assertResolvedIdentifier(teraTypeIds, option.teraTypeId, `formTeraOptions:${option.formId}:teraTypeId`)
   }
-  for (const option of dataset.formGigantamaxOptions) {
-    const source = formsById.get(option.sourceFormId)
-    const target = formsById.get(option.gigantamaxFormId)
-    if (!source || !target || source.speciesId !== target.speciesId || source.isBattleOnly || !target.isBattleOnly) {
-      throw new Error(`formGigantamaxOptions:${option.sourceFormId}:${option.gigantamaxFormId}`)
-    }
-  }
+  const battleDataIssues = collectBattleDataIssues(dataset)
+  if (battleDataIssues.length > 0) throw new Error(battleDataIssues[0])
 }
 
 export function prepareBattlePublicationRows(

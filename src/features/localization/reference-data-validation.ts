@@ -403,6 +403,19 @@ export function validateReferenceData(
   }
 }
 
+export function collectBattleDataIssues(
+  dataset: ReferenceDataset,
+  options: {
+    expectedBattleRowCounts?: BattleExpectedRowCounts
+    expectedBattleDatasetProfile?: BattleDatasetProfile
+  } = {},
+): string[] {
+  return validateReferenceData(dataset, {
+    expectedBattleRowCounts: options.expectedBattleRowCounts,
+    expectedBattleDatasetProfile: options.expectedBattleDatasetProfile,
+  }).battleDataIssues
+}
+
 export function chooseActivePublicationId(
   currentPublicationId: string,
   candidatePublicationId: string,

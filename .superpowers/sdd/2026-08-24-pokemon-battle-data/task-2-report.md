@@ -66,3 +66,43 @@ Result: passed (`next typegen && tsc --noEmit`).
 ## Concerns
 
 - The new staging row kinds are intentionally prepared but cannot be consumed by the current database RPC until Task 3 adds its schema and atomic replacement branches. No database migration was added here by scope.
+
+## Review Fix
+
+### Changes
+
+- Added `collectBattleDataIssues()` as the single reusable battle semantic-validation boundary. `assertOptionFilterCandidate()` now calls it after basic identifier/reference validation and rejects its first stable issue before any database query or staging write.
+- Added a direct publication regression: invalid base stats reject before the client's `from()` method can run. The reused validator covers invalid nature adjustments, battle-only and missing playable Tera options, Ogerpon/Terapagos option counts, and Gigantamax relationship semantics with the same stable issue locations.
+- Added the requested core-publication regression. It builds a report whose only invalidity is `forms:eevee-normal:baseStats` in `battleDataIssues` and proves `publishValidatedCandidate()` returns the current publication state unchanged.
+- Added negative cross-species and non-battle-only Gigantamax target tests, plus a positive UUID-payload assertion for `form_gigantamax_option` staging.
+
+### TDD Evidence
+
+RED command:
+
+```powershell
+pnpm test -- tests/unit/reference-data-validation.test.ts tests/unit/pokemon-option-filter-reference-data.test.ts tests/unit/pokemon-option-filter-publication.test.ts tests/unit/core-reference-publication.test.ts
+```
+
+Before adding the reused semantic guard, the new direct publication test followed the pre-existing path into its `database should not be called` client stub instead of rejecting `forms:form-0:baseStats`; that demonstrated the candidate validator did not enforce battle semantics.
+
+GREEN command:
+
+```powershell
+pnpm test -- tests/unit/reference-data-validation.test.ts tests/unit/pokemon-option-filter-reference-data.test.ts tests/unit/pokemon-option-filter-publication.test.ts tests/unit/core-reference-publication.test.ts
+```
+
+Result: 4 test files passed, 32 tests passed.
+
+Type check:
+
+```powershell
+pnpm typecheck
+```
+
+Result: passed (`next typegen && tsc --noEmit`).
+
+### Review-Fix Self-Review
+
+- Kept the existing structural validation order, so its established error contracts still win before semantic validation.
+- Confirmed semantic validation is invoked before any Supabase publication lookup, staging insertion, or RPC replacement.

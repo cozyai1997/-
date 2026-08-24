@@ -4,7 +4,26 @@ import {
   buildCoreReferenceSql,
   prepareCoreReferenceData,
 } from '../../scripts/data/publish-core-reference-data'
-import type { ReferenceDataset } from '../../src/features/localization/reference-data-validation'
+import {
+  validateReferenceData,
+  type ExpectedRowCounts,
+  type ReferenceDataset,
+} from '../../src/features/localization/reference-data-validation'
+import { publishValidatedCandidate } from '../../scripts/data/publish-reference-data'
+
+const fixtureCounts: ExpectedRowCounts = {
+  types: 1,
+  species: 1,
+  forms: 2,
+  abilities: 1,
+  moves: 0,
+  learnsets: 0,
+  items: 2,
+  evolutions: 1,
+  formAbilities: 0,
+  natures: 1,
+  typeMatchups: 1,
+}
 
 const dataset: ReferenceDataset = {
   version: 'fixture-v1',
@@ -89,5 +108,31 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
     expect(sql).toContain('as row(identifier text, "nameKo" text, "colorHex" text')
     expect(sql).toContain("status = 'active'")
     expect(sql.trimEnd()).toMatch(/\$publication\$;$/u)
+  })
+
+  it('battleDataIssues만 있는 후보는 기존 핵심 게시본을 교체하지 않는다', () => {
+    const candidate = structuredClone(dataset)
+    candidate.forms[0].baseStats.speed = 0
+    candidate.forms[1].nameKo = '거다이맥스'
+    candidate.items[1] = { id: 'unknown_item', nameKo: '알수없는아이템', descriptionKo: '검증용 설명' }
+    const report = validateReferenceData(candidate, {
+      expectedRowCounts: fixtureCounts,
+      expectedBattleRowCounts: { teraTypes: 2, formTeraOptions: 2, formGigantamaxOptions: 1 },
+      expectedBattleDatasetProfile: { playableForms: 1, battleOnlyForms: 1, battleOnlyDiagnostics: 0 },
+    })
+    const current = {
+      activePublicationId: 'current-publication',
+      publications: [{
+        id: 'current-publication', version: 'old-version', rowCounts: fixtureCounts,
+        sourceCommits: {}, sha256: {},
+      }],
+    }
+
+    expect(report.missingKoreanFields).toEqual([])
+    expect(report.brokenReferences).toEqual([])
+    expect(report.countMismatches).toEqual([])
+    expect(report.manifestIssues).toEqual([])
+    expect(report.battleDataIssues).toEqual(['forms:eevee-normal:baseStats'])
+    expect(publishValidatedCandidate(current, candidate, report)).toBe(current)
   })
 })

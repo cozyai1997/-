@@ -178,4 +178,38 @@ describe('한국어 기준 데이터 공개 검증', () => {
       'formTeraOptions:eevee-gmax:battle-only',
     ]))
   })
+
+  it.each([
+    ['cross-species Gigantamax source', (dataset: ReferenceDataset) => {
+      dataset.forms[1].speciesId = 'other-species'
+      dataset.species.push({ id: 'other-species', nationalDexNumber: 999, nameKo: '검증종', descriptionKo: '검증 설명' })
+    }],
+    ['non-battle-only Gigantamax target', (dataset: ReferenceDataset) => {
+      dataset.forms[1].isBattleOnly = false
+    }],
+  ])('거다이맥스 %s 관계를 거부한다', (_label, modify) => {
+    const dataset = structuredClone(completeFixture) as ReferenceDataset
+    dataset.forms.push({
+      id: 'eevee-gmax', speciesId: 'eevee', baseFormId: 'eevee-normal', nameKo: '거다이맥스',
+      primaryTypeId: 'normal', secondaryTypeId: null,
+      baseStats: { hp: 55, attack: 55, defense: 50, special_attack: 45, special_defense: 65, speed: 55 },
+      isBattleOnly: true, aspects: ['gmax'],
+    })
+    dataset.reportedCounts.forms = 2
+    dataset.formGigantamaxOptions = [{ sourceFormId: 'eevee-normal', gigantamaxFormId: 'eevee-gmax' }]
+    dataset.reportedCounts.formGigantamaxOptions = 1
+    modify(dataset)
+
+    const report = validateReferenceData(dataset, {
+      expectedRowCounts: { ...fixtureCounts, forms: 2, species: dataset.species.length },
+      expectedBattleRowCounts: fixtureBattleCounts,
+      expectedBattleDatasetProfile: {
+        playableForms: dataset.forms.filter((form) => !form.isBattleOnly).length,
+        battleOnlyForms: dataset.forms.filter((form) => form.isBattleOnly).length,
+        battleOnlyDiagnostics: 0,
+      },
+    })
+
+    expect(report.battleDataIssues).toContain('formGigantamaxOptions:eevee-normal:eevee-gmax')
+  })
 })

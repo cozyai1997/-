@@ -36,7 +36,7 @@ function countCorrectCandidate(): ReferenceDataset {
     version: 'candidate-v1',
     sourceCommits: {},
     sha256: {},
-    battleOnlyDiagnostics: [],
+    battleOnlyDiagnostics: Array.from({ length: 9 }, (_, index) => `diagnostic-${index}`),
     reportedCounts: {
       types: 1,
       species: 1,
@@ -111,20 +111,31 @@ describe('포켓몬 선택 필터 게시', () => {
   it('전투 게시 행은 내부 UUID를 연결하고 화면용 이름은 한국어만 유지한다', () => {
     const dataset = {
       ...countCorrectCandidate(),
-      forms: [{
-        id: 'form-a', speciesId: 'species-a', baseFormId: null, nameKo: '일반',
-        primaryTypeId: 'normal', secondaryTypeId: null,
-        baseStats: { hp: 50, attack: 51, defense: 52, special_attack: 53, special_defense: 54, speed: 55 },
-        isBattleOnly: false, aspects: [],
-      }],
+      forms: [
+        {
+          id: 'form-a', speciesId: 'species-a', baseFormId: null, nameKo: '일반',
+          primaryTypeId: 'normal', secondaryTypeId: null,
+          baseStats: { hp: 50, attack: 51, defense: 52, special_attack: 53, special_defense: 54, speed: 55 },
+          isBattleOnly: false, aspects: [],
+        },
+        {
+          id: 'form-a-gmax', speciesId: 'species-a', baseFormId: 'form-a', nameKo: '거다이맥스',
+          primaryTypeId: 'normal', secondaryTypeId: null,
+          baseStats: { hp: 50, attack: 51, defense: 52, special_attack: 53, special_defense: 54, speed: 55 },
+          isBattleOnly: true, aspects: ['gmax'],
+        },
+      ],
       natures: [{ id: 'hardy', nameKo: '노력', increasedStat: null, decreasedStat: null }],
       teraTypes: [{ id: 'normal', nameKo: '노말', referenceTypeId: 'normal', sortOrder: 0 }],
       formTeraOptions: [{ formId: 'form-a', teraTypeId: 'normal' }],
-      formGigantamaxOptions: [],
+      formGigantamaxOptions: [{ sourceFormId: 'form-a', gigantamaxFormId: 'form-a-gmax' }],
     } as ReferenceDataset
 
     const rows = prepareBattlePublicationRows(dataset, {
-      formIds: new Map([['form-a', '00000000-0000-4000-8000-000000000001']]),
+      formIds: new Map([
+        ['form-a', '00000000-0000-4000-8000-000000000001'],
+        ['form-a-gmax', '00000000-0000-4000-8000-000000000005'],
+      ]),
       natureIds: new Map([['hardy', '00000000-0000-4000-8000-000000000002']]),
       teraTypeIds: new Map([['normal', '00000000-0000-4000-8000-000000000003']]),
       typeIds: new Map([['normal', '00000000-0000-4000-8000-000000000004']]),
@@ -137,6 +148,15 @@ describe('포켓몬 선택 필터 게시', () => {
           form_id: '00000000-0000-4000-8000-000000000001', base_form_id: null,
           base_hp: 50, base_attack: 51, base_defense: 52, base_special_attack: 53,
           base_special_defense: 54, base_speed: 55, is_battle_only: false,
+        },
+      },
+      {
+        rowKind: 'form_battle_profile',
+        payload: {
+          form_id: '00000000-0000-4000-8000-000000000005',
+          base_form_id: '00000000-0000-4000-8000-000000000001',
+          base_hp: 50, base_attack: 51, base_defense: 52, base_special_attack: 53,
+          base_special_defense: 54, base_speed: 55, is_battle_only: true,
         },
       },
       {
@@ -160,6 +180,13 @@ describe('포켓몬 선택 필터 게시', () => {
           tera_type_id: '00000000-0000-4000-8000-000000000003',
         },
       },
+      {
+        rowKind: 'form_gigantamax_option',
+        payload: {
+          source_form_id: '00000000-0000-4000-8000-000000000001',
+          gigantamax_form_id: '00000000-0000-4000-8000-000000000005',
+        },
+      },
     ])
     expect(JSON.stringify(rows)).not.toContain('form-a')
     expect(rows.find((row) => row.rowKind === 'tera_type')?.payload.name_ko).toBe('노말')
@@ -174,6 +201,16 @@ describe('포켓몬 선택 필터 게시', () => {
       abilities: [{ id: 'adaptability', nameKo: '적응력', descriptionKo: '같은 타입 기술이 강해진다.' }],
       moves: [{ id: 'tackle', nameKo: 'Tackle', descriptionKo: '상대에게 부딪친다.' }],
     })).toThrow('moves:tackle:nameKo')
+  })
+
+  it('전투 의미 계약을 위반한 후보는 데이터베이스 호출 전에 거부한다', async () => {
+    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
+    const candidate = structuredClone(validCandidate)
+    candidate.forms[0].baseStats.hp = 0
+
+    await expect(publishPokemonOptionFilterReferenceData(candidate, client as never))
+      .rejects.toThrow('forms:form-0:baseStats')
+    expect(client.from).not.toHaveBeenCalled()
   })
 
   it('행 수 또는 보고 수가 맞지 않으면 데이터베이스 호출 전에 거부한다', async () => {
