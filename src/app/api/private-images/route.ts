@@ -137,7 +137,7 @@ async function authorizeLocator(request: Request) {
   const client = await createClient()
   const authenticated = await client.auth.getUser()
   if (authenticated.error || !authenticated.data.user) return jsonError('로그인이 필요합니다.', 401)
-  const pokemon = await getOwnedPokemonDetail(client, dex, entry)
+  const pokemon = await getOwnedPokemonDetail(client, dex, entry, authenticated.data.user.id)
   if (!pokemon) return jsonError('포켓몬을 찾을 수 없습니다.', 404)
   return { client, userId: authenticated.data.user.id, pokemon }
 }

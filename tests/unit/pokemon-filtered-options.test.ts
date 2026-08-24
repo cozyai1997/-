@@ -306,6 +306,7 @@ function queryClient(
     filters?: Array<[string, string, unknown]>
     ranges?: Array<[string, number, number]>
     requireLimitFor?: string
+    getUser?: () => Promise<{ data: { user: { id: string } | null }; error: Error | null }>
   } = {},
 ) {
   function query(table: string) {
@@ -346,7 +347,7 @@ function queryClient(
 
   return {
     auth: {
-      getUser: () => Promise.resolve({ data: { user: { id: 'user' } }, error: null }),
+      getUser: options.getUser ?? (() => Promise.resolve({ data: { user: { id: 'user' } }, error: null })),
     },
     from: (table: string) => query(table),
   } as unknown as SupabaseClient<Database>
@@ -401,6 +402,7 @@ describe('전투 기준 저장소 계약', () => {
   it('목록과 과거 상세는 한국어 테라타입, 인자, 기술 전투 세부정보를 보존한다', async () => {
     const filters: Array<[string, string, unknown]> = []
     const ranges: Array<[string, number, number]> = []
+    const getUser = vi.fn(() => Promise.resolve({ data: { user: { id: 'user' } }, error: null }))
     const client = queryClient({
       owned_pokemon: {
         data: [{
@@ -435,12 +437,12 @@ describe('전투 기준 저장소 계약', () => {
         }],
         error: null,
       },
-    }, { filters, ranges })
+    }, { filters, ranges, getUser })
 
     await expect(listOwnedPokemon(client)).resolves.toEqual([expect.objectContaining({
       teraTypeNameKo: '물', hasGigantamaxFactor: true,
     })])
-    await expect(getOwnedPokemonDetail(client, 133, 1)).resolves.toEqual(expect.objectContaining({
+    await expect(getOwnedPokemonDetail(client, 133, 1, 'preauthenticated-user')).resolves.toEqual(expect.objectContaining({
       teraTypeNameKo: '물',
       hasGigantamaxFactor: true,
       battle: expect.objectContaining({
@@ -454,9 +456,26 @@ describe('전투 기준 저장소 계약', () => {
       targetMoveDetails: [expect.objectContaining({ moveId: 'target-move', conditionKo: '기술머신으로 습득' })],
     }))
     expect(filters).toContainEqual(['owned_pokemon', 'reference_species.national_dex_number', 133])
-    expect(filters).toContainEqual(['owned_pokemon', 'user_id', 'user'])
+    expect(getUser).not.toHaveBeenCalled()
+    expect(filters.filter(([table, column]) => table === 'owned_pokemon' && column === 'user_id')).toEqual([
+      ['owned_pokemon', 'user_id', 'preauthenticated-user'],
+      ['owned_pokemon', 'user_id', 'preauthenticated-user'],
+    ])
     expect(filters).toContainEqual(['owned_pokemon', 'id', 'owned'])
     expect(ranges).toContainEqual(['owned_pokemon', 0, 0])
+  })
+
+  it('사전 인증 owner가 없으면 서버 인증 사용자 조회를 유지한다', async () => {
+    const filters: Array<[string, string, unknown]> = []
+    const getUser = vi.fn(() => Promise.resolve({ data: { user: { id: 'protected-page-user' } }, error: null }))
+    const client = queryClient({
+      owned_pokemon: { data: [], error: null },
+    }, { filters, getUser })
+
+    await expect(getOwnedPokemonDetail(client, 133, 1)).resolves.toBeNull()
+
+    expect(getUser).toHaveBeenCalledOnce()
+    expect(filters).toContainEqual(['owned_pokemon', 'user_id', 'protected-page-user'])
   })
 
   it('편집 기준데이터는 성격 보정의 닫힌 능력치 키를 포함한다', async () => {

@@ -509,15 +509,15 @@ export async function getOwnedPokemonDetail(
   client: SupabaseClient<Database>,
   nationalDexNumber: number,
   entry: number,
+  preauthenticatedOwnerId?: string,
 ) {
-  const { data: userResult, error: userError } = await client.auth.getUser()
-  if (userError) throw userError
-  if (!userResult.user) return null
+  const ownerId = preauthenticatedOwnerId ?? await getAuthenticatedOwnerId(client)
+  if (!ownerId) return null
 
   const ownedPokemonIdRequest = client
     .from('owned_pokemon')
     .select('id, reference_species!inner(national_dex_number)')
-    .eq('user_id', userResult.user.id)
+    .eq('user_id', ownerId)
     .eq('reference_species.national_dex_number', nationalDexNumber)
     .order('created_at')
     .range(entry - 1, entry - 1)
@@ -543,7 +543,7 @@ export async function getOwnedPokemonDetail(
       ability:reference_abilities(name_ko),
       held_item:reference_items(name_ko)
     `)
-    .eq('user_id', userResult.user.id)
+    .eq('user_id', ownerId)
     .eq('id', ownedPokemonId.id)
     .maybeSingle()
   type OwnedPokemonRow = QueryData<typeof detailRequest>
@@ -634,6 +634,12 @@ export async function getOwnedPokemonDetail(
       targetDexNumber: rule.target_form.reference_species.national_dex_number,
     })),
   } satisfies OwnedPokemonDetail
+}
+
+async function getAuthenticatedOwnerId(client: SupabaseClient<Database>): Promise<string | null> {
+  const { data, error } = await client.auth.getUser()
+  if (error) throw error
+  return data.user?.id ?? null
 }
 
 export async function listOwnedPokemonEditOptions(client: SupabaseClient<Database>) {
