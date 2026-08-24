@@ -300,25 +300,56 @@ describe('필터 저장소 요청 순서', () => {
   })
 })
 
-function queryClient(payloads: Record<string, { data: unknown; error: unknown }>) {
+function queryClient(
+  payloads: Record<string, { data: unknown; error: unknown }>,
+  options: {
+    filters?: Array<[string, string, unknown]>
+    ranges?: Array<[string, number, number]>
+    requireLimitFor?: string
+  } = {},
+) {
   function query(table: string) {
     const result = payloads[table] ?? { data: [], error: null }
+    let limited = false
+    let single = false
     const builder = {
       select() { return builder },
-      eq() { return builder },
+      eq(column: string, value: unknown) {
+        options.filters?.push([table, column, value])
+        return builder
+      },
       in() { return builder },
       order() { return builder },
-      range() { return builder },
-      limit() { return builder },
-      maybeSingle() { return builder },
+      range(from: number, to: number) {
+        options.ranges?.push([table, from, to])
+        return builder
+      },
+      limit() {
+        limited = true
+        return builder
+      },
+      maybeSingle() {
+        single = true
+        return builder
+      },
       then(onFulfilled: (value: unknown) => unknown, onRejected: (reason: unknown) => unknown) {
-        return Promise.resolve(result).then(onFulfilled, onRejected)
+        const response = table === options.requireLimitFor && !limited
+          ? { data: null, error: new Error('다중 거다이맥스 관계에는 limit(1)이 필요합니다.') }
+          : single && Array.isArray(result.data)
+            ? { ...result, data: result.data[0] ?? null }
+            : result
+        return Promise.resolve(response).then(onFulfilled, onRejected)
       },
     }
     return builder
   }
 
-  return { from: (table: string) => query(table) } as unknown as SupabaseClient<Database>
+  return {
+    auth: {
+      getUser: () => Promise.resolve({ data: { user: { id: 'user' } }, error: null }),
+    },
+    from: (table: string) => query(table),
+  } as unknown as SupabaseClient<Database>
 }
 
 describe('전투 기준 저장소 계약', () => {
@@ -343,7 +374,33 @@ describe('전투 기준 저장소 계약', () => {
     }])
   })
 
+  it('여러 거다이맥스 대상 관계가 있어도 존재 여부만 확인한다', async () => {
+    const result = await listPokemonFilteredOptions(queryClient({
+      data_publications: { data: { id: 'publication' }, error: null },
+      reference_forms: {
+        data: {
+          id: 'form', species_id: 'species', base_form_id: null,
+          base_hp: 1, base_attack: 1, base_defense: 1,
+          base_special_attack: 1, base_special_defense: 1, base_speed: 1,
+          reference_species: { identifier: 'eevee' },
+        },
+        error: null,
+      },
+      reference_move_learnsets: { data: [], error: null },
+      reference_form_abilities: { data: [], error: null },
+      reference_form_tera_options: { data: [], error: null },
+      reference_form_gigantamax_options: {
+        data: [{ source_form_id: 'form' }, { source_form_id: 'form' }],
+        error: null,
+      },
+    }, { requireLimitFor: 'reference_form_gigantamax_options' }), 'species', 'form')
+
+    expect(result.battle.canGigantamax).toBe(true)
+  })
+
   it('목록과 과거 상세는 한국어 테라타입, 인자, 기술 전투 세부정보를 보존한다', async () => {
+    const filters: Array<[string, string, unknown]> = []
+    const ranges: Array<[string, number, number]> = []
     const client = queryClient({
       owned_pokemon: {
         data: [{
@@ -364,15 +421,21 @@ describe('전투 기준 저장소 계약', () => {
       reference_evolution_rules: { data: [], error: null },
       owned_pokemon_moves: {
         data: [{
-          move_id: 'move', kind: 'current', slot: 1, target_condition_ko: '',
+          move_id: 'move', kind: 'current', slot: 1, target_condition_ko: '과거 기록',
           reference_moves: {
             name_ko: '몸통박치기', description_ko: '상대에게 부딪친다.', damage_class: 'physical',
             power: 40, accuracy: 100, pp: 35, reference_types: { name_ko: '노말' },
           },
+        }, {
+          move_id: 'target-move', kind: 'target', slot: 1, target_condition_ko: '기술머신으로 습득',
+          reference_moves: {
+            name_ko: '전광석화', description_ko: '눈보다 빠르게 공격한다.', damage_class: 'physical',
+            power: 40, accuracy: 100, pp: 30, reference_types: { name_ko: '노말' },
+          },
         }],
         error: null,
       },
-    })
+    }, { filters, ranges })
 
     await expect(listOwnedPokemon(client)).resolves.toEqual([expect.objectContaining({
       teraTypeNameKo: '물', hasGigantamaxFactor: true,
@@ -386,9 +449,14 @@ describe('전투 기준 저장소 계약', () => {
       }),
       currentMoveDetails: [{
         moveId: 'move', slot: 1, nameKo: '몸통박치기', descriptionKo: '상대에게 부딪친다.',
-        typeKo: '노말', damageClassKo: '물리', power: 40, accuracy: 100, pp: 35, conditionKo: null,
+        typeKo: '노말', damageClassKo: '물리', power: 40, accuracy: 100, pp: 35, conditionKo: '과거 기록',
       }],
+      targetMoveDetails: [expect.objectContaining({ moveId: 'target-move', conditionKo: '기술머신으로 습득' })],
     }))
+    expect(filters).toContainEqual(['owned_pokemon', 'reference_species.national_dex_number', 133])
+    expect(filters).toContainEqual(['owned_pokemon', 'user_id', 'user'])
+    expect(filters).toContainEqual(['owned_pokemon', 'id', 'owned'])
+    expect(ranges).toContainEqual(['owned_pokemon', 0, 0])
   })
 
   it('편집 기준데이터는 성격 보정의 닫힌 능력치 키를 포함한다', async () => {

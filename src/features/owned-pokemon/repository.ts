@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { QueryData, SupabaseClient } from '@supabase/supabase-js'
 
 import type { Database } from '@/types/database.generated'
 
@@ -259,6 +259,7 @@ export async function listPokemonFilteredOptions(
     .eq('is_active', true)
     .eq('is_battle_only', false)
     .maybeSingle()
+  type FormRow = QueryData<typeof formRequest>
   const learnsetRequest = client
     .from('reference_move_learnsets')
     .select(`
@@ -303,11 +304,13 @@ export async function listPokemonFilteredOptions(
     .eq('publication_id', publicationId)
     .eq('reference_tera_types.publication_id', publicationId)
     .eq('reference_tera_types.is_active', true)
+  type TeraOptionRows = QueryData<typeof teraRequest>
   const gigantamaxRequest = client
     .from('reference_form_gigantamax_options')
     .select('source_form_id')
     .eq('source_form_id', formId)
     .eq('publication_id', publicationId)
+    .limit(1)
     .maybeSingle()
   const [abilityResult, teraResult, gigantamaxResult] = await Promise.all([
     abilityRequest,
@@ -318,19 +321,9 @@ export async function listPokemonFilteredOptions(
   if (teraResult.error) throw teraResult.error
   if (gigantamaxResult.error) throw gigantamaxResult.error
 
-  const form = formResult.data as unknown as {
-    base_hp: number | null
-    base_attack: number | null
-    base_defense: number | null
-    base_special_attack: number | null
-    base_special_defense: number | null
-    base_speed: number | null
-    reference_species: { identifier: string }
-  }
-  const teraTypes = (teraResult.data as unknown as Array<{
-    tera_type_id: string
-    reference_tera_types: { id: string; name_ko: string; sort_order: number }
-  }>)
+  const form: FormRow = formResult.data
+  const teraRows: TeraOptionRows = teraResult.data
+  const teraTypes: FormBattleProfile['teraTypes'] = teraRows
     .map((row) => ({
       id: row.reference_tera_types.id,
       nameKo: row.reference_tera_types.name_ko,
@@ -341,11 +334,11 @@ export async function listPokemonFilteredOptions(
 
   return {
     abilities: groupAbilityOptions(
-      abilityResult.data as unknown as AbilityRelationRow[],
+      abilityResult.data,
       formId,
       formResult.data.base_form_id,
     ),
-    moves: groupMoveOptions(learnsetResult.data as unknown as MoveLearnsetRelationRow[]),
+    moves: groupMoveOptions(learnsetResult.data),
     battle: {
       baseStats: toBaseStatsOrNull(form),
       hpRule: form.reference_species.identifier === 'shedinja' ? 'fixed-one' : 'standard',
@@ -517,13 +510,29 @@ export async function getOwnedPokemonDetail(
   nationalDexNumber: number,
   entry: number,
 ) {
-  const { data, error } = await client
+  const { data: userResult, error: userError } = await client.auth.getUser()
+  if (userError) throw userError
+  if (!userResult.user) return null
+
+  const ownedPokemonIdRequest = client
+    .from('owned_pokemon')
+    .select('id, reference_species!inner(national_dex_number)')
+    .eq('user_id', userResult.user.id)
+    .eq('reference_species.national_dex_number', nationalDexNumber)
+    .order('created_at')
+    .range(entry - 1, entry - 1)
+    .maybeSingle()
+  const { data: ownedPokemonId, error: ownedPokemonIdError } = await ownedPokemonIdRequest
+  if (ownedPokemonIdError) throw ownedPokemonIdError
+  if (!ownedPokemonId) return null
+
+  const detailRequest = client
     .from('owned_pokemon')
     .select(`
       id, species_id, form_id, nickname, gender, level, captured_on,
       original_nature_id, effective_nature_id, ability_id, original_iv,
       effective_iv, ev, held_item_id, notes, tera_type_id, has_gigantamax_factor, created_at,
-      reference_species(name_ko, national_dex_number, identifier),
+      reference_species!inner(name_ko, national_dex_number, identifier),
       reference_forms(
         name_ko, base_hp, base_attack, base_defense,
         base_special_attack, base_special_defense, base_speed
@@ -534,12 +543,12 @@ export async function getOwnedPokemonDetail(
       ability:reference_abilities(name_ko),
       held_item:reference_items(name_ko)
     `)
-    .order('created_at')
+    .eq('user_id', userResult.user.id)
+    .eq('id', ownedPokemonId.id)
+    .maybeSingle()
+  type OwnedPokemonRow = QueryData<typeof detailRequest>
+  const { data: pokemon, error } = await detailRequest
   if (error) throw error
-
-  const pokemon = data.filter(
-    (row) => row.reference_species.national_dex_number === nationalDexNumber,
-  )[entry - 1]
   if (!pokemon) return null
 
   const [rulesResult, movesResult] = await Promise.all([
@@ -569,35 +578,8 @@ export async function getOwnedPokemonDetail(
   if (rulesResult.error) throw rulesResult.error
   if (movesResult.error) throw movesResult.error
 
-  const ownedMoves = movesResult.data as unknown as Array<{
-    move_id: string
-    kind: 'current' | 'target'
-    slot: number
-    target_condition_ko: string
-    reference_moves: {
-      name_ko: string
-      description_ko: string
-      damage_class: string
-      power: number | null
-      accuracy: number | null
-      pp: number | null
-      reference_types: { name_ko: string }
-    }
-  }>
-  const moveDetails = ownedMoves.map(toOwnedMoveDetail)
-  const form = pokemon.reference_forms as unknown as {
-    base_hp: number | null
-    base_attack: number | null
-    base_defense: number | null
-    base_special_attack: number | null
-    base_special_defense: number | null
-    base_speed: number | null
-  }
-  const species = pokemon.reference_species as unknown as {
-    name_ko: string
-    national_dex_number: number
-    identifier: string
-  }
+  const ownedPokemon: OwnedPokemonRow = pokemon
+  const ownedMoves = movesResult.data
 
   return {
     id: pokemon.id,
@@ -626,22 +608,26 @@ export async function getOwnedPokemonDetail(
         moveId: move.move_id,
         conditionKo: move.target_condition_ko,
       })),
-    nameKo: species.name_ko,
+    nameKo: ownedPokemon.reference_species.name_ko,
     formNameKo: pokemon.reference_forms.name_ko,
-    nationalDexNumber: species.national_dex_number,
+    nationalDexNumber: ownedPokemon.reference_species.national_dex_number,
     originalNatureNameKo: pokemon.original_nature?.name_ko ?? null,
     effectiveNatureNameKo: pokemon.effective_nature?.name_ko ?? null,
     abilityNameKo: pokemon.ability?.name_ko ?? null,
     heldItemNameKo: pokemon.held_item?.name_ko ?? null,
     teraTypeNameKo: pokemon.tera_type?.name_ko ?? null,
     battle: {
-      baseStats: toBaseStatsOrNull(form),
-      hpRule: species.identifier === 'shedinja' ? 'fixed-one' : 'standard',
+      baseStats: toBaseStatsOrNull(ownedPokemon.reference_forms),
+      hpRule: ownedPokemon.reference_species.identifier === 'shedinja' ? 'fixed-one' : 'standard',
       teraTypes: [],
       canGigantamax: false,
     },
-    currentMoveDetails: moveDetails.filter((move) => move.conditionKo === null),
-    targetMoveDetails: moveDetails.filter((move) => move.conditionKo !== null),
+    currentMoveDetails: ownedMoves
+      .filter((move) => move.kind === 'current')
+      .map(toOwnedMoveDetail),
+    targetMoveDetails: ownedMoves
+      .filter((move) => move.kind === 'target')
+      .map(toOwnedMoveDetail),
     evolutionRules: rulesResult.data.map((rule) => ({
       conditionKo: rule.condition_ko,
       targetNameKo: rule.target_form.reference_species.name_ko,
