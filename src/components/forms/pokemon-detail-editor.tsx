@@ -76,7 +76,12 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
   const selectedQuickAbility = quickAbilities.find((ability) => ability.id === draft.abilityId)
   const selectedNature = options.natures.find((nature) => nature.id === pokemon.effectiveNatureId)
   const natureAdjustment = effectiveNatureAdjustment(pokemon.effectiveNatureId, selectedNature)
-  const actualStats: OwnedPokemonStatResult = quickFilterStatus !== 'loaded' || !quickOptions
+  const statBattle = quickFilterStatus === 'loaded' && quickOptions
+    ? quickOptions.battle
+    : quickFilterStatus === 'error'
+      ? pokemon.battle
+      : null
+  const actualStats: OwnedPokemonStatResult = statBattle === null
     ? {
         status: 'unavailable',
         reasonKo: '최신 폼 전투 정보를 불러오지 못해 실제 능력치를 계산할 수 없습니다.',
@@ -87,12 +92,12 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
           reasonKo: '성격 보정 정보가 불완전하여 실제 능력치를 계산할 수 없습니다.',
         }
       : calculateOwnedPokemonStats({
-          baseStats: quickOptions.battle.baseStats,
+          baseStats: statBattle.baseStats,
           effectiveIv: pokemon.effectiveIv,
           ev: pokemon.ev,
           level: pokemon.level,
           nature: natureAdjustment,
-          hpRule: quickOptions.battle.hpRule,
+          hpRule: statBattle.hpRule,
         })
 
   useEffect(() => {
@@ -200,8 +205,13 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
         router.refresh()
         return
       }
-      setPokemon(correction)
-      setDraft(correction)
+      const correctedPokemon = {
+        ...pokemon,
+        capturedOn: correction.capturedOn,
+        originalIv: correction.originalIv,
+      }
+      setPokemon(correctedPokemon)
+      setDraft(correctedPokemon)
       setCorrectionOpen(false)
       setMessage('보호 정보를 정정하고 변경 이력을 보존했습니다.')
     } catch {
@@ -355,7 +365,7 @@ export function PokemonDetailEditor({ initialPokemon, options, dex, entry }: Pok
       <section className="detail-panel battle-overview" aria-labelledby="battle-overview-title">
         <h2 id="battle-overview-title">전투 정보</h2>
         <PokemonStatTable
-          baseStats={quickOptions?.battle.baseStats ?? null}
+          baseStats={statBattle?.baseStats ?? null}
           originalIv={pokemon.originalIv}
           effectiveIv={pokemon.effectiveIv}
           ev={pokemon.ev}

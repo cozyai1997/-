@@ -55,6 +55,7 @@ export function calculateOwnedPokemonStats(
 function normalizeNatureAdjustment(nature: NatureAdjustment | null): NatureAdjustment | null {
   if (nature === null) return { increased: null, decreased: null }
   if (!isNonHpStatOrNull(nature.increased) || !isNonHpStatOrNull(nature.decreased)) return null
+  if ((nature.increased === null) !== (nature.decreased === null)) return null
   return nature
 }
 

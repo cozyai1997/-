@@ -242,6 +242,24 @@ describe('포켓몬 상세 필터 수정', () => {
     expect(await screen.findByText('선택한 모습에 등록된 특성이 없습니다.')).toBeVisible()
   })
 
+  it('등록 필터가 거부하는 과거 배틀 전용 폼도 저장된 프로필로 능력치를 표시한다', async () => {
+    listPokemonFilteredOptions.mockRejectedValueOnce(new Error('배틀 전용 폼은 등록할 수 없음'))
+    render(<PokemonDetailEditor
+      initialPokemon={pokemon({ battle: standardBattle })}
+      options={options}
+      dex={134}
+      entry={1}
+    />)
+
+    expect(await screen.findByText('빠른 수정 특성을 불러오지 못했습니다. 다시 시도해 주세요.'))
+      .toBeVisible()
+    expect(screen.getByRole('button', { name: '빠른 수정 저장' })).toBeDisabled()
+    const table = screen.getByRole('table', { name: '보유 포켓몬 능력치' })
+    expect(within(table).getByRole('row', { name: /HP/ })).toHaveTextContent('65')
+    expect(within(table).getByRole('row', { name: /HP/ })).toHaveTextContent('148')
+    expect(within(table).queryByText(/계산 불가/)).not.toBeInTheDocument()
+  })
+
   it('최신 폼 프로필로 다섯 전투 수치 열과 현재·목표 기술의 기본 PP를 표시한다', async () => {
     const historicalBattle = {
       ...eligibleBattle,
@@ -325,6 +343,15 @@ describe('포켓몬 상세 필터 수정', () => {
       ...options,
       natures: [{ id: 'nature-missing', nameKo: '불완전', increasedStat: 'speed' }],
     } as unknown as OwnedPokemonEditOptions],
+    ['선택한 성격 보정 중 한쪽만 null', {
+      ...options,
+      natures: [{
+        id: 'nature-missing',
+        nameKo: '반쪽 보정',
+        increasedStat: 'speed',
+        decreasedStat: null,
+      }],
+    } satisfies OwnedPokemonEditOptions],
   ])('%s이면 값을 추정하지 않는다', async (_caseName, editOptions) => {
     render(<PokemonDetailEditor
       initialPokemon={pokemon({ effectiveNatureId: 'nature-missing' })}
@@ -509,6 +536,64 @@ describe('포켓몬 상세 필터 수정', () => {
         hasGigantamaxFactor: false,
       }),
       '전투 폼 입력 오류 정정',
+    )
+  })
+
+  it('동일 폼 보호 정정 뒤에는 RPC가 저장하지 않은 전투 정합화를 저장값처럼 표시하지 않는다', async () => {
+    listPokemonFilteredOptions.mockResolvedValue(waveIneligibleOptions)
+    const persisted = pokemon({
+      battle: eligibleBattle,
+      teraTypeId: 'tera-water',
+      teraTypeNameKo: '물',
+      hasGigantamaxFactor: true,
+    })
+    let persistedAfterCorrection = persisted
+    correctOwnedPokemon.mockImplementationOnce(async (
+      _client: unknown,
+      _pokemonId: string,
+      correction: OwnedPokemonDetail,
+    ) => {
+      persistedAfterCorrection = {
+        ...persisted,
+        capturedOn: correction.capturedOn,
+        originalIv: correction.originalIv,
+      }
+    })
+    const user = userEvent.setup()
+    const view = render(<PokemonDetailEditor
+      initialPokemon={persisted}
+      options={options}
+      dex={134}
+      entry={1}
+    />)
+    await waitFor(() => expect(screen.getByRole('button', { name: '빠른 수정 저장' })).toBeEnabled())
+
+    await user.click(screen.getByRole('button', { name: '보호 정보 정정 열기' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '정정 저장' })).toBeEnabled())
+    await user.type(screen.getByLabelText('정정 사유'), '포획일 입력 오류 정정')
+    await user.click(screen.getByRole('button', { name: '정정 저장' }))
+
+    await screen.findByText('보호 정보를 정정하고 변경 이력을 보존했습니다.')
+    let savedBattle = screen.getByLabelText('저장된 전투 설정')
+    expect(within(savedBattle).getByText('테라타입: 물')).toBeVisible()
+    expect(within(savedBattle).getByText('거다이맥스 가능')).toBeVisible()
+
+    view.unmount()
+    render(<PokemonDetailEditor
+      initialPokemon={persistedAfterCorrection}
+      options={options}
+      dex={134}
+      entry={1}
+    />)
+    await waitFor(() => expect(screen.getByRole('button', { name: '빠른 수정 저장' })).toBeEnabled())
+    savedBattle = screen.getByLabelText('저장된 전투 설정')
+    expect(within(savedBattle).getByText('테라타입: 물')).toBeVisible()
+    expect(within(savedBattle).getByText('거다이맥스 가능')).toBeVisible()
+    expect(correctOwnedPokemon).toHaveBeenCalledWith(
+      expect.anything(),
+      'owned-pokemon',
+      expect.anything(),
+      '포획일 입력 오류 정정',
     )
   })
 })

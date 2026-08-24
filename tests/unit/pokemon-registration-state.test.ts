@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 
 import {
   createRegistrationDraft,
@@ -261,6 +261,26 @@ describe('종·모습 선택 정합성', () => {
       teraTypes: [{ id: 'water', nameKo: '물' }],
       canGigantamax: false,
     })).toMatchObject({
+      teraTypeId: null,
+      hasGigantamaxFactor: false,
+    })
+  })
+
+  it('전투 선택 정합화는 부가 필드를 보존하면서 좁은 입력 리터럴을 실제 반환 범위로 넓힌다', () => {
+    const reconciled = reconcileBattleSelections({
+      label: '상세 상태' as const,
+      teraTypeId: 'fire' as const,
+      hasGigantamaxFactor: true as const,
+    }, {
+      teraTypes: [{ id: 'water', nameKo: '물' }],
+      canGigantamax: false,
+    })
+
+    expectTypeOf(reconciled.label).toEqualTypeOf<'상세 상태'>()
+    expectTypeOf(reconciled.teraTypeId).toEqualTypeOf<string | null>()
+    expectTypeOf(reconciled.hasGigantamaxFactor).toEqualTypeOf<boolean>()
+    expect(reconciled).toEqual({
+      label: '상세 상태',
       teraTypeId: null,
       hasGigantamaxFactor: false,
     })

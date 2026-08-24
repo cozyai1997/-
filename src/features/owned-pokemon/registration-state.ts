@@ -4,6 +4,9 @@ export const registrationDraftKey = 'pokemon-registration-draft-v3'
 const legacyRegistrationDraftKeys = ['pokemon-registration-draft-v2', 'pokemon-registration-draft-v1']
 
 export type RegistrationDraft = OwnedPokemonInput & { step: number }
+type BattleSelectionState = Pick<OwnedPokemonInput, 'teraTypeId' | 'hasGigantamaxFactor'>
+type ReconciledBattleSelections<T extends BattleSelectionState> =
+  Omit<T, keyof BattleSelectionState> & BattleSelectionState
 
 export function createRegistrationDraft(): RegistrationDraft {
   return {
@@ -136,14 +139,14 @@ export function reconcileFilteredSelections(
 }
 
 export function reconcileBattleSelections<
-  T extends Pick<OwnedPokemonInput, 'teraTypeId' | 'hasGigantamaxFactor'>,
+  T extends BattleSelectionState,
 >(
   draft: T,
   battle: {
     teraTypes: ReadonlyArray<{ id: string; nameKo: string }>
     canGigantamax: boolean
   },
-): T {
+): ReconciledBattleSelections<T> {
   const allowedTeraTypeIds = new Set(battle.teraTypes.map((teraType) => teraType.id))
   return {
     ...draft,

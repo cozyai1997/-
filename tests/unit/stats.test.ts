@@ -97,6 +97,20 @@ describe('포켓몬 능력치 공식', () => {
     })
   })
 
+  it('선택 성격 보정은 증가와 감소 중 정확히 한쪽만 null이면 계산 불가다', () => {
+    expect(calculateOwnedPokemonStats({
+      baseStats: { hp: 100, attack: 100, defense: 100, special_attack: 100, special_defense: 100, speed: 100 },
+      effectiveIv: { hp: 31, attack: 31, defense: 31, special_attack: 31, special_defense: 31, speed: 31 },
+      ev: { hp: 0, attack: 0, defense: 0, special_attack: 0, special_defense: 0, speed: 0 },
+      level: 50,
+      nature: { increased: 'speed', decreased: null },
+      hpRule: 'standard',
+    })).toEqual({
+      status: 'unavailable',
+      reasonKo: '성격 보정 정보가 불완전하여 실제 능력치를 계산할 수 없습니다.',
+    })
+  })
+
   it('등록 능력치 계산은 성격이 미지정이면 중립 보정으로 계산한다', () => {
     expect(calculateOwnedPokemonStats({
       baseStats: { hp: 70, attack: 90, defense: 45, special_attack: 90, special_defense: 45, speed: 40 },
