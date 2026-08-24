@@ -17,8 +17,8 @@ export type OwnedPokemonInput = {
   ev: StatBlock
   heldItemId: string | null
   notes: string
-  teraTypeId?: string | null
-  hasGigantamaxFactor?: boolean
+  teraTypeId: string | null
+  hasGigantamaxFactor: boolean
   currentMoves: Array<{ moveId: string }>
   targetMoves: Array<{ moveId: string; conditionKo: string }>
 }

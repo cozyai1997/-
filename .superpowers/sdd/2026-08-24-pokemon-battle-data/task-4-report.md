@@ -51,6 +51,32 @@ next typegen && tsc --noEmit passed
 - A selected Tera type is preserved only when its ID is in the current battle profile allowlist. Gigantamax factor is forced false when the current form is ineligible.
 - `git diff --check` completed without whitespace errors.
 
-## Concern / follow-up boundary
+## Review fix
 
-`OwnedPokemonInput` exposes the new battle fields as optional at this intermediate Task 4 boundary. Registration drafts always materialize them as `null` and `false`, while the pre-existing Task 5 repository/detail contracts and a security fixture do not yet read or provide them. Keeping the input backward-compatible lets Task 4 pass `pnpm typecheck` without modifying prohibited Task 5+ repository/UI files. Task 5 should make all persistence reads/writes carry the values and can tighten the input boundary once its detail model is expanded.
+Review found that the two battle fields were optional in `OwnedPokemonInput`, contrary to the approved Task 4 contract.
+
+### RED evidence
+
+Added a compile-time `@ts-expect-error` test that assigns an input with both battle fields omitted. Before the fix, running `pnpm typecheck` failed with:
+
+```text
+tests/unit/owned-pokemon-schema.test.ts: Unused '@ts-expect-error' directive.
+```
+
+This proves omission was incorrectly accepted.
+
+### GREEN evidence
+
+- Made `teraTypeId: string | null` and `hasGigantamaxFactor: boolean` required in `OwnedPokemonInput`.
+- Kept registration draft defaults explicit (`null` / `false`) and retained malformed-storage normalization coverage.
+- Updated the existing typed detail return and the owned-Pokemon transaction fixture with explicit no-selection values. This is an application-contract compatibility change only; it does not add Task 5 persistence/query behavior.
+
+Verified:
+
+```text
+pnpm test -- tests/unit/stats.test.ts tests/unit/owned-pokemon-schema.test.ts tests/unit/pokemon-registration-state.test.ts tests/security/owned-pokemon-transaction.spec.ts
+3 files passed, 1 file skipped; 37 tests passed, 17 skipped
+
+pnpm typecheck
+next typegen && tsc --noEmit passed
+```

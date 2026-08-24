@@ -483,6 +483,8 @@ describeLocalSupabase('보유 포켓몬과 기술의 원자적 등록', () => {
       ev: stats,
       heldItemId: null,
       notes: '',
+      teraTypeId: null,
+      hasGigantamaxFactor: false,
       currentMoves: [{ moveId: ids.validMove }],
       targetMoves: [{ moveId: ids.validMove, conditionKo: '레벨 5에 습득' }],
     })

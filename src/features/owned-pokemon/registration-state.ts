@@ -63,10 +63,10 @@ export function readRegistrationDraft(storage: Pick<Storage, 'getItem'>) {
         ev: normalizeStatBlock(parsed.ev, defaults.ev),
         heldItemId: nullableStringOrDefault(parsed.heldItemId, defaults.heldItemId),
         notes: stringOrDefault(parsed.notes, defaults.notes),
-        teraTypeId: nullableIdOrDefault(parsed.teraTypeId, defaults.teraTypeId ?? null),
+        teraTypeId: nullableIdOrDefault(parsed.teraTypeId, defaults.teraTypeId),
         hasGigantamaxFactor: booleanOrDefault(
           parsed.hasGigantamaxFactor,
-          defaults.hasGigantamaxFactor ?? false,
+          defaults.hasGigantamaxFactor,
         ),
         currentMoves: normalizeCurrentMoves(parsed.currentMoves),
         targetMoves: normalizeTargetMoves(parsed.targetMoves),

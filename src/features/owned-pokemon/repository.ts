@@ -452,6 +452,8 @@ export async function getOwnedPokemonDetail(
     ev: parseStatBlock(pokemon.ev),
     heldItemId: pokemon.held_item_id,
     notes: pokemon.notes,
+    teraTypeId: null,
+    hasGigantamaxFactor: false,
     currentMoves: movesResult.data
       .filter((move) => move.kind === 'current')
       .map((move) => ({ moveId: move.move_id })),

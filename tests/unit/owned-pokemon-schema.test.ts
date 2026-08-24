@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { createRegistrationDraft } from '@/features/owned-pokemon/registration-state'
-import { validateOwnedPokemon, type StatBlock as SchemaStatBlock } from '@/features/owned-pokemon/schema'
+import {
+  validateOwnedPokemon,
+  type OwnedPokemonInput,
+  type StatBlock as SchemaStatBlock,
+} from '@/features/owned-pokemon/schema'
 import type { StatBlock as SharedStatBlock } from '@/features/stats/types'
 
 function validDraft() {
@@ -14,6 +18,15 @@ describe('보유 포켓몬 입력 검증', () => {
     const schema: SchemaStatBlock = shared
 
     expect(schema).toEqual(shared)
+  })
+
+  it('전투 선택 필드는 입력 계약에서 생략할 수 없다', () => {
+    const { teraTypeId: _teraTypeId, hasGigantamaxFactor: _hasGigantamaxFactor, ...withoutBattleSelections } = validDraft()
+
+    // @ts-expect-error OwnedPokemonInput requires both battle selection fields.
+    const omitted: OwnedPokemonInput = withoutBattleSelections
+
+    expect(omitted).toEqual(withoutBattleSelections)
   })
 
   it('정상 입력을 허용한다', () => {
