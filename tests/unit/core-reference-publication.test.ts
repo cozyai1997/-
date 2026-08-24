@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -6,15 +6,12 @@ import { describe, expect, it } from 'vitest'
 
 import {
   analyzeEvolutionPublication,
-  buildValidatedCoreReferenceSql,
   prepareCoreReferenceData,
+  writeFreshCoreReferenceSql,
 } from '../../scripts/data/publish-core-reference-data'
 import {
-  validateReferenceData,
-  type ExpectedRowCounts,
   type ReferenceDataset,
 } from '../../src/features/localization/reference-data-validation'
-import { buildValidatedCandidateState } from '../../scripts/data/publish-reference-data'
 import { createProductionReferenceCandidate } from '../fixtures/reference-data/production-candidate'
 
 const reviewedSourceCommits = {
@@ -24,20 +21,6 @@ const reviewedSourceCommits = {
 const reviewedSourceHashes = {
   evolutions: 'aececbd2841ccf662732c42c5eef4c2b5c3ec3e4041fa80fab1872d21b8f108f',
   sourceManifest: 'd9f8a25fcfed05e8a5392c474c3d0b3c834ed6f1c8a1a417eded5d72071e0531',
-}
-
-const fixtureCounts: ExpectedRowCounts = {
-  types: 1,
-  species: 1,
-  forms: 2,
-  abilities: 1,
-  moves: 0,
-  learnsets: 0,
-  items: 2,
-  evolutions: 1,
-  formAbilities: 0,
-  natures: 1,
-  typeMatchups: 1,
 }
 
 const dataset: ReferenceDataset = {
@@ -101,6 +84,36 @@ const dataset: ReferenceDataset = {
 }
 
 describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
+  it('fresh SQL writer는 성공 시 final만 남기고 tmp를 지운다', () => {
+    const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'pokemon-core-writer-'))
+    const outputPath = resolve(temporaryDirectory, 'publication.sql')
+    try {
+      writeFreshCoreReferenceSql(outputPath, '검증된 새 SQL')
+      expect(readFileSync(outputPath, 'utf8')).toBe('검증된 새 SQL')
+      expect(existsSync(`${outputPath}.tmp`)).toBe(false)
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true })
+    }
+  })
+
+  it('fresh SQL writer는 기존 final을 덮어쓰지 않고 tmp 잔존도 만들지 않는다', () => {
+    const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'pokemon-core-writer-'))
+    const outputPath = resolve(temporaryDirectory, 'publication.sql')
+    writeFileSync(outputPath, '기존 파일', 'utf8')
+
+    try {
+      expect(() => writeFreshCoreReferenceSql(outputPath, '새 SQL')).toThrow('already exists')
+      expect(readFileSync(outputPath, 'utf8')).toBe('기존 파일')
+      expect(existsSync(`${outputPath}.tmp`)).toBe(false)
+
+      rmSync(outputPath)
+      mkdirSync(outputPath)
+      expect(() => writeFreshCoreReferenceSql(outputPath, '새 SQL')).toThrow('already exists')
+      expect(existsSync(`${outputPath}.tmp`)).toBe(false)
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true })
+    }
+  })
   it('화면에 필요한 행만 한국어 상태로 준비한다', () => {
     const prepared = prepareCoreReferenceData(dataset)
 
@@ -272,41 +285,6 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
     })
   })
 
-  it('실패 시 일부 행이 노출되지 않도록 하나의 트랜잭션 SQL을 만든다', () => {
-    const candidate = createProductionReferenceCandidate()
-    const sql = buildValidatedCoreReferenceSql(candidate)
-
-    expect(sql).toMatch(/^do \$publication\$/u)
-    expect(sql).toContain('declare target_publication_id uuid;')
-    expect(sql).toContain("'candidate-v1'")
-    expect(sql).toContain('jsonb_to_recordset')
-    expect(sql).toContain('as row(identifier text, "nameKo" text, "colorHex" text')
-    expect(sql).toContain('"sourceDiagnosticIssues":[]')
-    expect(sql).toContain("status = 'active'")
-    expect(sql.trimEnd()).toMatch(/\$publication\$;$/u)
-  })
-
-  it.each([
-    ['printf 표시 토큰', (candidate: ReferenceDataset) => { candidate.items[0].nameKo = '%s포플레' }, '%s'],
-    ['중복 관계', (candidate: ReferenceDataset) => { candidate.learnsets[1] = { ...candidate.learnsets[0] } }, 'duplicate'],
-    ['전투 의미 위반', (candidate: ReferenceDataset) => { candidate.forms[0].baseStats.speed = 0 }, 'baseStats'],
-    ['조작된 누락 진단', (candidate: ReferenceDataset) => {
-      candidate.evolutions[0] = {
-        id: 'species-a>megaspecies-a:0', fromSpeciesId: 'species-a', fromFormId: 'form-0',
-        toSpeciesId: 'species-a', conditionKo: '키스톤 사용',
-      }
-      candidate.sourceDiagnostics = [{
-        code: 'missing-evolution-target-form', table: 'evolutions',
-        key: 'species-a>megaspecies-a:0', target: 'forms:species-a-mega',
-      }]
-    }, 'unreviewed'],
-  ] as const)('%s 후보는 실행 가능한 핵심 게시 SQL을 만들지 않는다', (_label, tamper, issue) => {
-    const candidate = createProductionReferenceCandidate()
-    tamper(candidate)
-
-    expect(() => buildValidatedCoreReferenceSql(candidate)).toThrow(issue)
-  })
-
   it('핵심 게시 CLI는 trusted source 없이 유효 후보 SQL을 만들지 않는다', () => {
     const temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'pokemon-core-auth-'))
     const inputPath = resolve(temporaryDirectory, 'candidate.json')
@@ -324,34 +302,10 @@ describe('운영용 핵심 포켓몬 기준데이터 게시', () => {
       expect(result.status).not.toBe(0)
       expect(`${result.stdout}${result.stderr}`).toContain('--source')
       expect(existsSync(outputPath)).toBe(false)
+      expect(existsSync(`${outputPath}.tmp`)).toBe(false)
     } finally {
       rmSync(temporaryDirectory, { recursive: true, force: true })
     }
   })
 
-  it('battleDataIssues만 있는 후보는 기존 핵심 게시본을 교체하지 않는다', () => {
-    const candidate = structuredClone(dataset)
-    candidate.forms[0].baseStats.speed = 0
-    candidate.forms[1].nameKo = '거다이맥스'
-    candidate.items[1] = { id: 'unknown_item', nameKo: '알수없는아이템', descriptionKo: '검증용 설명' }
-    const report = validateReferenceData(candidate, {
-      expectedRowCounts: fixtureCounts,
-      expectedBattleRowCounts: { teraTypes: 2, formTeraOptions: 2, formGigantamaxOptions: 1 },
-      expectedBattleDatasetProfile: { playableForms: 1, battleOnlyForms: 1, battleOnlyDiagnostics: 0 },
-    })
-    const current = {
-      activePublicationId: 'current-publication',
-      publications: [{
-        id: 'current-publication', version: 'old-version', rowCounts: fixtureCounts,
-        sourceCommits: {}, sha256: {},
-      }],
-    }
-
-    expect(report.missingKoreanFields).toEqual([])
-    expect(report.brokenReferences).toEqual([])
-    expect(report.countMismatches).toEqual([])
-    expect(report.manifestIssues).toEqual([])
-    expect(report.battleDataIssues).toEqual(['forms:eevee-normal:baseStats'])
-    expect(buildValidatedCandidateState(current, candidate, report)).toBe(current)
-  })
 })

@@ -12,7 +12,7 @@ import {
 } from '../../src/features/localization/reference-data-validation'
 import {
   authenticateReferenceDataset,
-  authenticateReferenceDatasetAgainstTrustedDataset,
+  type ReferenceDatasetAuthentication,
 } from './authenticate-reference-data'
 
 const batchSize = 750
@@ -103,7 +103,7 @@ async function insertBatches(
   }
 }
 
-export async function stageThenReplacePublicationRows<T>(
+async function stageThenReplacePublicationRows<T>(
   rows: T[],
   size: number,
   stage: (batch: T[]) => Promise<void>,
@@ -324,8 +324,9 @@ export function assertKoreanOptionDisplayValues(
   }
 }
 
-export async function stagePokemonOptionFilterReferenceData(
+async function publishAuthenticatedPokemonOptionFilterReferenceData(
   dataset: ReferenceDataset,
+  authentication: ReferenceDatasetAuthentication,
   client: SupabaseClient,
 ): Promise<{
   moves: number
@@ -468,6 +469,8 @@ export async function stagePokemonOptionFilterReferenceData(
       const { error } = await client.rpc('replace_pokemon_option_filter_reference_data', {
         p_publication_id: publicationId,
         p_batch_id: batchId,
+        p_candidate_digest: authentication.candidateDigest,
+        p_expected_version: dataset.version,
       })
       if (error) throw new Error(`포켓몬 선택 필터 교체 실패: ${error.message}`)
     },
@@ -486,22 +489,13 @@ export async function stagePokemonOptionFilterReferenceData(
   }
 }
 
-export async function publishPokemonOptionFilterReferenceDataAgainstTrustedDataset(
-  dataset: ReferenceDataset,
-  trustedDataset: ReferenceDataset,
-  client: SupabaseClient,
-) {
-  authenticateReferenceDatasetAgainstTrustedDataset(dataset, trustedDataset)
-  return stagePokemonOptionFilterReferenceData(dataset, client)
-}
-
 export async function publishPokemonOptionFilterReferenceData(
   dataset: ReferenceDataset,
   trustedSourceRoot: string,
   client: SupabaseClient,
 ) {
-  authenticateReferenceDataset(dataset, trustedSourceRoot)
-  return stagePokemonOptionFilterReferenceData(dataset, client)
+  const authentication = authenticateReferenceDataset(dataset, trustedSourceRoot)
+  return publishAuthenticatedPokemonOptionFilterReferenceData(dataset, authentication, client)
 }
 
 async function main(): Promise<void> {

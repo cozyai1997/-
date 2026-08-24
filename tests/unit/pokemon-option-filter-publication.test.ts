@@ -2,18 +2,123 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   assertKoreanOptionDisplayValues,
+  assertOptionFilterCandidate,
   assertOptionFilterPublicationCounts,
   prepareBattlePublicationRows,
-  publishPokemonOptionFilterReferenceDataAgainstTrustedDataset,
-  stagePokemonOptionFilterReferenceData,
-  stageThenReplacePublicationRows,
+  publishPokemonOptionFilterReferenceData,
 } from '../../scripts/data/publish-pokemon-option-filter-reference-data'
-import type { ReferenceDataset } from '@/features/localization/reference-data-validation'
+import {
+  assertValidReferenceDataForPublication,
+  type ReferenceDataset,
+} from '@/features/localization/reference-data-validation'
 import { createProductionReferenceCandidate } from '../fixtures/reference-data/production-candidate'
 
 const validCandidate = createProductionReferenceCandidate()
 
+function assertPublishableOptionCandidate(candidate: ReferenceDataset): void {
+  assertOptionFilterCandidate(candidate)
+  assertValidReferenceDataForPublication(candidate)
+}
+
+const sourceMock = vi.hoisted(() => ({
+  trustedDataset: null as ReferenceDataset | null,
+}))
+
+vi.mock('../../scripts/data/import-reference-data', () => ({
+  importReferenceData: () => {
+    if (!sourceMock.trustedDataset) throw new Error('trusted source fixture missing')
+    return structuredClone(sourceMock.trustedDataset)
+  },
+}))
+
+function createPublisherHarness(
+  candidate: ReferenceDataset,
+  options: { failInsertAt?: number; rpcError?: string } = {},
+) {
+  const publicationId = '00000000-0000-4000-8000-000000000099'
+  const databaseRows: Record<string, Array<Record<string, unknown>>> = {
+    reference_types: candidate.types.map((row, index) => ({ id: `type-${index}`, identifier: row.id })),
+    reference_species: candidate.species.map((row, index) => ({ id: `species-${index}`, identifier: row.id })),
+    reference_forms: candidate.forms.map((row, index) => ({
+      id: `form-${index}`, identifier: row.id, publication_id: publicationId,
+      species_id: `species-${candidate.species.findIndex((species) => species.id === row.speciesId)}`,
+      name_ko: row.nameKo, primary_type_id: null, secondary_type_id: null,
+      is_default: row.id === `${row.speciesId}-normal`, is_active: true,
+    })),
+    reference_abilities: candidate.abilities.map((row, index) => ({ id: `ability-${index}`, identifier: row.id })),
+    reference_natures: candidate.natures.map((row, index) => ({ id: `nature-${index}`, identifier: row.id })),
+  }
+  const filters: Array<[string, unknown]> = []
+  const publicationQuery = {
+    select() { return publicationQuery },
+    eq(column: string, value: unknown) {
+      filters.push([column, value])
+      return publicationQuery
+    },
+    maybeSingle: vi.fn().mockResolvedValue({ data: { id: publicationId }, error: null }),
+  }
+  let insertCalls = 0
+  const stagingQuery = {
+    insert: vi.fn(async (rows: unknown[]) => {
+      void rows
+      insertCalls += 1
+      return insertCalls === options.failInsertAt
+        ? { error: { message: 'second batch failed' } }
+        : { error: null }
+    }),
+    delete: vi.fn(() => stagingQuery),
+    eq: vi.fn(() => stagingQuery),
+    then(resolve: (value: { error: null }) => unknown) {
+      return Promise.resolve({ error: null }).then(resolve)
+    },
+  }
+  const selectQuery = (table: string) => ({
+    select() { return this },
+    eq() { return this },
+    order() { return this },
+    range(start: number, end: number) {
+      return Promise.resolve({ data: databaseRows[table].slice(start, end + 1), error: null })
+    },
+  })
+  const rpc = vi.fn().mockResolvedValue(options.rpcError
+    ? { error: { message: options.rpcError } }
+    : { error: null })
+  const client = {
+    from: vi.fn((table: string) => table === 'data_publications'
+      ? publicationQuery
+      : table === 'reference_option_filter_publication_staging'
+        ? stagingQuery
+        : selectQuery(table)),
+    rpc,
+  }
+  return { client, filters, publicationId, rpc, stagingQuery }
+}
+
 describe('포켓몬 선택 필터 게시', () => {
+  it('인증된 candidate digest를 교체 RPC 트랜잭션에 전달한다', async () => {
+    const candidate = createProductionReferenceCandidate()
+    sourceMock.trustedDataset = structuredClone(candidate)
+    const { client, filters, publicationId, rpc, stagingQuery } = createPublisherHarness(candidate)
+
+    await publishPokemonOptionFilterReferenceData(candidate, 'trusted-source', client as never)
+
+    expect(rpc).toHaveBeenCalledOnce()
+    expect(rpc).toHaveBeenCalledWith('replace_pokemon_option_filter_reference_data', {
+      p_publication_id: publicationId,
+      p_batch_id: expect.any(String),
+      p_candidate_digest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      p_expected_version: candidate.version,
+    })
+    expect(filters).toEqual([
+      ['version', candidate.version],
+      ['status', 'active'],
+    ])
+    expect(stagingQuery.insert.mock.calls.length).toBeGreaterThan(1)
+    expect(stagingQuery.insert.mock.calls.every(([batch]) => (
+      Array.isArray(batch) && batch.length <= 750
+    ))).toBe(true)
+    expect(stagingQuery.delete).not.toHaveBeenCalled()
+  }, 30_000)
   it('전투 게시 행은 내부 UUID를 연결하고 화면용 이름은 한국어만 유지한다', () => {
     const dataset = {
       ...createProductionReferenceCandidate(),
@@ -109,45 +214,36 @@ describe('포켓몬 선택 필터 게시', () => {
     })).toThrow('moves:tackle:nameKo')
   })
 
-  it('전투 의미 계약을 위반한 후보는 데이터베이스 호출 전에 거부한다', async () => {
-    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
+  it('전투 의미 계약을 위반한 후보를 거부한다', () => {
     const candidate = structuredClone(validCandidate)
     candidate.forms[0].baseStats.hp = 0
 
-    await expect(stagePokemonOptionFilterReferenceData(candidate, client as never))
-      .rejects.toThrow('forms:form-0:baseStats')
-    expect(client.from).not.toHaveBeenCalled()
+    expect(() => assertPublishableOptionCandidate(candidate)).toThrow('forms:form-0:baseStats')
   })
 
-  it('중복 관계가 있으면 전체 validator가 첫 DB 호출 전에 거부한다', async () => {
-    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
+  it('중복 관계가 있으면 전체 validator가 거부한다', () => {
     const candidate = structuredClone(validCandidate)
     candidate.learnsets[1] = { ...candidate.learnsets[0] }
 
-    await expect(stagePokemonOptionFilterReferenceData(candidate, client as never))
-      .rejects.toThrow('learnsets:species-a::move-0:level:1:레벨 1에 습득 0:duplicate')
-    expect(client.from).not.toHaveBeenCalled()
+    expect(() => assertPublishableOptionCandidate(candidate))
+      .toThrow('learnsets:species-a::move-0:level:1:레벨 1에 습득 0:duplicate')
   })
 
   it.each([
     ['printf', (candidate: ReferenceDataset) => { candidate.items[0].nameKo = '%s포플레' }, '%s'],
     ['brace', (candidate: ReferenceDataset) => { candidate.items[0].descriptionKo = '{count}개 사용' }, '{count}'],
-  ] as const)('%s 표시 토큰이 있으면 전체 validator가 첫 DB 호출 전에 거부한다', async (
+  ] as const)('%s 표시 토큰이 있으면 전체 validator가 거부한다', (
     _label,
     tamper,
     token,
   ) => {
-    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
     const candidate = structuredClone(validCandidate)
     tamper(candidate)
 
-    await expect(stagePokemonOptionFilterReferenceData(candidate, client as never))
-      .rejects.toThrow(token)
-    expect(client.from).not.toHaveBeenCalled()
+    expect(() => assertPublishableOptionCandidate(candidate)).toThrow(token)
   })
 
-  it('검토 허용 목록에 없는 누락 메가 진단은 첫 DB 호출 전에 거부한다', async () => {
-    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
+  it('검토 허용 목록에 없는 누락 메가 진단을 거부한다', () => {
     const candidate = structuredClone(validCandidate)
     candidate.evolutions[0] = {
       id: 'species-a>megaspecies-a:0', fromSpeciesId: 'species-a', fromFormId: 'form-0',
@@ -158,36 +254,19 @@ describe('포켓몬 선택 필터 게시', () => {
       key: 'species-a>megaspecies-a:0', target: 'forms:species-a-mega',
     }]
 
-    await expect(stagePokemonOptionFilterReferenceData(candidate, client as never))
-      .rejects.toThrow('sourceDiagnostics:species-a>megaspecies-a:0:unreviewed')
-    expect(client.from).not.toHaveBeenCalled()
+    expect(() => assertPublishableOptionCandidate(candidate))
+      .toThrow('sourceDiagnostics:species-a>megaspecies-a:0:unreviewed')
   })
 
-  it('trusted source와 다른 유효 후보는 인증 단계에서 첫 DB 호출 전에 거부한다', async () => {
-    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
-    const trustedDataset = createProductionReferenceCandidate()
-    const candidate = structuredClone(trustedDataset)
-    candidate.items[0].descriptionKo = '검증을 통과하지만 신뢰 원본과 다른 설명이다.'
-
-    await expect(publishPokemonOptionFilterReferenceDataAgainstTrustedDataset(
-      candidate,
-      trustedDataset,
-      client as never,
-    )).rejects.toThrow('candidate-digest')
-    expect(client.from).not.toHaveBeenCalled()
-  })
-
-  it('행 수 또는 보고 수가 맞지 않으면 데이터베이스 호출 전에 거부한다', async () => {
-    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
+  it('행 수 또는 보고 수가 맞지 않으면 거부한다', () => {
     const candidate = {
       version: 'fixture-v1', sourceCommits: {}, sha256: {},
       reportedCounts: { types: 0, species: 0, forms: 0, abilities: 0, moves: 825, learnsets: 116519, items: 0, evolutions: 0, formAbilities: 3055, natures: 0, typeMatchups: 0 },
       types: [], species: [], forms: [], abilities: [], moves: [], learnsets: [], items: [], evolutions: [], formAbilities: [], natures: [], typeMatchups: [],
     } as unknown as ReferenceDataset
 
-    await expect(stagePokemonOptionFilterReferenceData(candidate, client as never))
-      .rejects.toThrow('moves:actual=0:reported=825:expected=826')
-    expect(client.from).not.toHaveBeenCalled()
+    expect(() => assertPublishableOptionCandidate(candidate))
+      .toThrow('moves:actual=0:reported=825:expected=826')
   })
 
   it.each([
@@ -313,103 +392,40 @@ describe('포켓몬 선택 필터 게시', () => {
       }),
       'formAbilities:0:abilityId',
     ],
-  ] as const)('행 수가 맞아도 %s 계약 위반은 첫 DB 호출 전에 거부한다', async (
+  ] as const)('행 수가 맞아도 %s 계약 위반을 거부한다', (
     _label,
     modify,
     expected,
   ) => {
-    const client = { from: vi.fn(() => { throw new Error('database should not be called') }) }
-
-    await expect(stagePokemonOptionFilterReferenceData(
-      modify(validCandidate),
-      client as never,
-    )).rejects.toThrow(expected)
-    expect(client.from).not.toHaveBeenCalled()
-  })
-
-  it('후보 버전과 active 상태를 함께 만족하는 게시본만 교체 대상으로 조회한다', async () => {
-    const filters: Array<[string, unknown]> = []
-    const query = {
-      select() { return query },
-      eq(column: string, value: unknown) {
-        filters.push([column, value])
-        return query
-      },
-      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
-    }
-    const client = {
-      from: vi.fn((table: string) => {
-        expect(table).toBe('data_publications')
-        return query
-      }),
-    }
-
-    await expect(stagePokemonOptionFilterReferenceData(validCandidate, client as never))
-      .rejects.toThrow('핵심 기준데이터 게시본이 없습니다')
-    expect(filters).toEqual([
-      ['version', validCandidate.version],
-      ['status', 'active'],
-    ])
+    expect(() => assertPublishableOptionCandidate(modify(validCandidate))).toThrow(expected)
   })
 
   it('스테이징 배치가 실패하면 기존 게시본 교체를 호출하지 않는다', async () => {
-    const stage = vi.fn()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('second batch failed'))
-    const replace = vi.fn().mockResolvedValue(undefined)
-    const cleanup = vi.fn().mockRejectedValue(new Error('cleanup must not mask stage failure'))
+    const candidate = createProductionReferenceCandidate()
+    sourceMock.trustedDataset = structuredClone(candidate)
+    const { client, rpc, stagingQuery } = createPublisherHarness(candidate, { failInsertAt: 2 })
 
-    await expect((stageThenReplacePublicationRows as unknown as (
-      rows: number[], size: number, stage: (batch: number[]) => Promise<void>, replace: () => Promise<void>, cleanup: () => Promise<void>,
-    ) => Promise<void>)([1, 2, 3], 2, stage, replace, cleanup))
-      .rejects.toThrow('second batch failed')
+    await expect(publishPokemonOptionFilterReferenceData(
+      candidate, 'trusted-source', client as never,
+    )).rejects.toThrow('second batch failed')
 
-    expect(stage).toHaveBeenCalledTimes(2)
-    expect(replace).not.toHaveBeenCalled()
-    expect(cleanup).toHaveBeenCalledTimes(1)
-  })
+    expect(stagingQuery.insert).toHaveBeenCalledTimes(2)
+    expect(rpc).not.toHaveBeenCalled()
+    expect(stagingQuery.delete).toHaveBeenCalledOnce()
+  }, 30_000)
 
   it('교체 RPC가 실패하면 원래 오류를 유지하면서 해당 시도의 스테이징을 정리한다', async () => {
-    const stage = vi.fn().mockResolvedValue(undefined)
-    const replace = vi.fn().mockRejectedValue(new Error('replacement RPC failed'))
-    const cleanup = vi.fn().mockResolvedValue(undefined)
+    const candidate = createProductionReferenceCandidate()
+    sourceMock.trustedDataset = structuredClone(candidate)
+    const { client, rpc, stagingQuery } = createPublisherHarness(candidate, {
+      rpcError: 'replacement RPC failed',
+    })
 
-    await expect((stageThenReplacePublicationRows as unknown as (
-      rows: number[], size: number, stage: (batch: number[]) => Promise<void>, replace: () => Promise<void>, cleanup: () => Promise<void>,
-    ) => Promise<void>)([1, 2, 3], 2, stage, replace, cleanup))
-      .rejects.toThrow('replacement RPC failed')
+    await expect(publishPokemonOptionFilterReferenceData(
+      candidate, 'trusted-source', client as never,
+    )).rejects.toThrow('replacement RPC failed')
 
-    expect(stage).toHaveBeenCalledTimes(2)
-    expect(cleanup).toHaveBeenCalledTimes(1)
-  })
-
-  it('모든 스테이징 배치가 끝난 뒤 한 번만 교체하고 배치 크기를 지킨다', async () => {
-    const staged: number[][] = []
-    const replace = vi.fn().mockResolvedValue(undefined)
-
-    await stageThenReplacePublicationRows([1, 2, 3, 4, 5], 2, async (batch) => { staged.push(batch) }, replace)
-
-    expect(staged).toEqual([[1, 2], [3, 4], [5]])
-    expect(replace).toHaveBeenCalledTimes(1)
-  })
-
-  it('반복 게시 시도는 각자 성공적으로 교체하고 실패하지 않은 시도의 스테이징을 지우지 않는다', async () => {
-    const stagedAttempts: string[][] = []
-    const replacedAttempts: string[] = []
-    const cleanup = vi.fn().mockResolvedValue(undefined)
-    const attempt = async (rows: string[]) => {
-      await (stageThenReplacePublicationRows as unknown as (
-        rows: string[], size: number, stage: (batch: string[]) => Promise<void>, replace: () => Promise<void>, cleanup: () => Promise<void>,
-      ) => Promise<void>)(rows, 2, async (batch) => { stagedAttempts.push(batch) }, async () => {
-        replacedAttempts.push(rows[0])
-      }, cleanup)
-    }
-
-    await attempt(['attempt-a:1', 'attempt-a:2'])
-    await attempt(['attempt-b:1', 'attempt-b:2'])
-
-    expect(stagedAttempts).toEqual([['attempt-a:1', 'attempt-a:2'], ['attempt-b:1', 'attempt-b:2']])
-    expect(replacedAttempts).toEqual(['attempt-a:1', 'attempt-b:1'])
-    expect(cleanup).not.toHaveBeenCalled()
-  })
+    expect(rpc).toHaveBeenCalledOnce()
+    expect(stagingQuery.delete).toHaveBeenCalledOnce()
+  }, 30_000)
 })

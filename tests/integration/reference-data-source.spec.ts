@@ -8,7 +8,11 @@ import {
   analyzeEvolutionPublication,
   buildCoreReferenceSql,
 } from '../../scripts/data/publish-core-reference-data'
-import { canonicalReferenceDatasetDigest } from '../../scripts/data/authenticate-reference-data'
+import {
+  canonicalReferenceDatasetDigest,
+  createCandidateValidationArtifact,
+} from '../../scripts/data/authenticate-reference-data'
+import { publishValidatedCandidate } from '../../scripts/data/publish-reference-data'
 import { validateReferenceData } from '../../src/features/localization/reference-data-validation'
 
 type CsvRow = Record<string, string>
@@ -110,8 +114,15 @@ describe.runIf(enabled)('실제 기준데이터 원본 독립 완전성', () => 
     const typeIds = new Set(sources.typeMatchups.flatMap((row) => [row.AttackType, row.DefenseType]))
     const publication = analyzeEvolutionPublication(candidate)
     const validation = validateReferenceData(candidate)
+    const validationArtifact = createCandidateValidationArtifact(candidate)
     const candidateDigest = canonicalReferenceDatasetDigest(candidate)
     const authenticatedSql = buildCoreReferenceSql(candidate, sourceRoot)
+    const publicationState = publishValidatedCandidate(
+      { activePublicationId: null, publications: [] },
+      candidate,
+      validationArtifact,
+      sourceRoot,
+    )
 
     expect(typeIds.size).toBe(18)
     expect(candidate.types).toHaveLength(typeIds.size)
@@ -121,12 +132,21 @@ describe.runIf(enabled)('실제 기준데이터 원본 독립 완전성', () => 
     expect(validation.sourceDiagnosticIssues).toEqual([])
     expect(candidateDigest).toMatch(/^[0-9a-f]{64}$/u)
     expect(authenticatedSql).toContain(`"candidateDigest":"${candidateDigest}"`)
+    expect(authenticatedSql.match(/"candidateDigest":/gu)).toHaveLength(2)
     expect(authenticatedSql).toContain(`"trustedSourceDigest":"${candidateDigest}"`)
     expect(authenticatedSql).toContain('"method":"trusted-source-reimport-sha256"')
     expect(authenticatedSql).toContain('"sourceCount":602')
     expect(authenticatedSql).toContain('"publishableCount":600')
     expect(authenticatedSql).toContain('"excludedMissingTargetCount":2')
     expect(authenticatedSql).toContain('"valid":true')
+    expect(publicationState.activePublicationId).toBe(candidateDigest)
+    expect(publicationState.publications).toEqual([
+      expect.objectContaining({
+        id: candidateDigest,
+        candidateDigest,
+        version: candidate.version,
+      }),
+    ])
     expect(candidate.sourceDiagnostics).toEqual([
       { code: 'missing-evolution-target-form', table: 'evolutions', key: 'milotic>megamilotic:233', target: 'forms:milotic-mega' },
       { code: 'missing-evolution-target-form', table: 'evolutions', key: 'milotic>megamilotic:234', target: 'forms:milotic-mega' },
@@ -151,5 +171,5 @@ describe.runIf(enabled)('실제 기준데이터 원본 독립 완전성', () => 
     expect(publication.publishableCount + publication.excludedPureSameSpeciesCount
       + publication.excludedMissingTargetCount + publication.excludedInvalidCount)
       .toBe(sources.evolutions.length)
-  }, 15_000)
+  }, 30_000)
 })

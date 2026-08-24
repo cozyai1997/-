@@ -1,4 +1,12 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  constants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -199,18 +207,19 @@ function jsonLiteral(value: unknown): string {
 
 function buildCoreReferenceSqlWithAuthentication(
   dataset: ReferenceDataset,
-  authentication?: ReferenceDatasetAuthentication,
+  authentication: ReferenceDatasetAuthentication,
 ): string {
   const validationReport = assertValidReferenceDataForPublication(dataset)
-  const publicationReport = authentication ? {
+  const publicationReport = {
     ...validationReport,
+    candidateDigest: authentication.candidateDigest,
     authentication: {
       method: authentication.method,
       candidateDigest: authentication.candidateDigest,
       trustedSourceDigest: authentication.trustedSourceDigest,
       evolutionAccounting: authentication.evolutionAccounting,
     },
-  } : validationReport
+  }
   const data: CoreReferenceData = prepareCoreReferenceData(dataset)
   const version = sqlLiteral(dataset.version)
   const rowCounts = Object.fromEntries(
@@ -348,10 +357,6 @@ $publication$;
 `
 }
 
-export function buildValidatedCoreReferenceSql(dataset: ReferenceDataset): string {
-  return buildCoreReferenceSqlWithAuthentication(dataset)
-}
-
 export function buildCoreReferenceSql(
   dataset: ReferenceDataset,
   trustedSourceRoot: string,
@@ -363,6 +368,32 @@ export function buildCoreReferenceSql(
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name)
   return index >= 0 ? process.argv[index + 1] : undefined
+}
+
+export function writeFreshCoreReferenceSql(target: string, sql: string): void {
+  const temporary = `${target}.tmp`
+  if (existsSync(target) || existsSync(temporary)) {
+    throw new Error(`core SQL output already exists: ${target}`)
+  }
+
+  let ownsTemporary = false
+  let ownsTarget = false
+  try {
+    writeFileSync(temporary, sql, { encoding: 'utf8', flag: 'wx' })
+    ownsTemporary = true
+    copyFileSync(temporary, target, constants.COPYFILE_EXCL)
+    ownsTarget = true
+    unlinkSync(temporary)
+    ownsTemporary = false
+  } catch (error) {
+    if (ownsTarget && existsSync(target)) {
+      try { unlinkSync(target) } catch { /* Preserve the publication failure. */ }
+    }
+    if (ownsTemporary && existsSync(temporary)) {
+      try { unlinkSync(temporary) } catch { /* Preserve the publication failure. */ }
+    }
+    throw error
+  }
 }
 
 function main(): void {
@@ -378,9 +409,7 @@ function main(): void {
   const target = resolve(output)
   const sql = buildCoreReferenceSql(dataset, source)
   mkdirSync(dirname(target), { recursive: true })
-  const temporary = `${target}.tmp`
-  writeFileSync(temporary, sql, 'utf8')
-  renameSync(temporary, target)
+  writeFreshCoreReferenceSql(target, sql)
   process.stdout.write(`${target}\n`)
 }
 

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -8,7 +7,6 @@ import type {
 } from '../../src/features/localization/reference-data-validation'
 import {
   authenticateReferenceDataset,
-  authenticateReferenceDatasetAgainstTrustedDataset,
   verifyCandidateValidationArtifact,
   type CandidateValidationArtifact,
   type ReferenceDatasetAuthentication,
@@ -32,24 +30,20 @@ function argument(name: string): string | undefined {
   return index >= 0 ? process.argv[index + 1] : undefined
 }
 
-export function buildValidatedCandidateState(
+function buildAuthenticatedCandidateState(
   currentState: PublicationState,
   dataset: ReferenceDataset,
-  report: ValidationReport,
-  authentication?: ReferenceDatasetAuthentication,
+  report: CandidateValidationArtifact,
+  authentication: ReferenceDatasetAuthentication,
 ): PublicationState {
-  if (!report.valid) return currentState
-  const id = authentication?.candidateDigest
-    ?? createHash('sha256')
-      .update(JSON.stringify({ version: dataset.version, sha256: dataset.sha256 }))
-      .digest('hex')
+  const id = authentication.candidateDigest
   const publication = {
     id,
     version: dataset.version,
     rowCounts: report.rowCounts,
     sourceCommits: dataset.sourceCommits,
     sha256: dataset.sha256,
-    candidateDigest: authentication?.candidateDigest,
+    candidateDigest: authentication.candidateDigest,
   }
   return {
     activePublicationId: id,
@@ -64,22 +58,7 @@ function publishAuthenticatedCandidateWithAuthentication(
   authentication: ReferenceDatasetAuthentication,
 ): PublicationState {
   const computedReport = verifyCandidateValidationArtifact(dataset, artifact)
-  return buildValidatedCandidateState(currentState, dataset, computedReport, authentication)
-}
-
-export function publishAuthenticatedCandidateAgainstTrustedDataset(
-  currentState: PublicationState,
-  dataset: ReferenceDataset,
-  artifact: CandidateValidationArtifact,
-  trustedDataset: ReferenceDataset,
-): PublicationState {
-  const authentication = authenticateReferenceDatasetAgainstTrustedDataset(dataset, trustedDataset)
-  return publishAuthenticatedCandidateWithAuthentication(
-    currentState,
-    dataset,
-    artifact,
-    authentication,
-  )
+  return buildAuthenticatedCandidateState(currentState, dataset, computedReport, authentication)
 }
 
 export function publishValidatedCandidate(

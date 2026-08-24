@@ -307,7 +307,7 @@
 
 - [ ] **Step 4: Implement DB invariants and atomic replacement**
 
-  `private.validate_reference_form_gigantamax_option()` must reject cross-species links, battle-only sources, and non-battle-only targets. Extend `replace_pokemon_option_filter_reference_data(uuid, uuid)` to validate all eight staging kinds and exact production counts before any replacement, then update form profiles/natures and replace Tera/Gmax rows in the same transaction.
+  `private.validate_reference_form_gigantamax_option()` must reject cross-species links, battle-only sources, and non-battle-only targets. Replace the old overload with `replace_pokemon_option_filter_reference_data(uuid, uuid, text, text)` so it validates the authenticated candidate digest/version, all nine staging kinds, and exact production counts before any replacement, then updates form profiles/natures and replaces Tera/Gmax rows in the same transaction.
 
   `private.reconcile_owned_pokemon_battle_options()` must reject explicitly invalid user choices but clear stale values when only species/form changes. It runs before insert/update of `species_id, form_id, tera_type_id, has_gigantamax_factor`.
 
@@ -686,58 +686,572 @@
 
   Expected: every command exits 0 with no warnings or residue.
 
-- [ ] **Step 6: Apply Supabase production migration and publish the same authenticated artifact**
+- [ ] **Step 6: Commit, push, and pin the release SHA before any production write**
 
-  Confirm the linked project is exactly `ipbqrgsdkoqtuqgnewrs`, then run `pnpm exec supabase db push --linked`. Before any data write, run the following read-only query and programmatically require exactly one active row whose version is `Cobbleverse 1.7.42+Cobblemon 1.7.3`, with 1,498 forms and 116,519 learnsets. If the active version or these counts differ, stop: activating a new core-only publication before its option rows are ready would expose an incomplete version.
-
-  Generate a fresh authenticated SQL artifact only for this release, execute that exact file, and prove it was not replaced between generation and execution:
+  Finish all local commits first. Require the feature branch, a clean worktree, and the exact linked project ref. Push and prove the remote branch resolves to the same immutable SHA before running any Supabase migration or data command:
 
   ```powershell
-  $activeSql = @"
-  select publication.version,
-    (select count(*) from public.reference_forms as form where form.publication_id = publication.id) as forms,
-    (select count(*) from public.reference_move_learnsets as learnset where learnset.publication_id = publication.id) as learnsets
-  from public.data_publications as publication
-  where publication.status = 'active'
-  "@
-  $activeRows = @(pnpm exec supabase db query --linked --output-format json $activeSql | ConvertFrom-Json)
-  if ($LASTEXITCODE -ne 0 -or $activeRows.Count -ne 1 -or
-      $activeRows[0].version -ne 'Cobbleverse 1.7.42+Cobblemon 1.7.3' -or
-      [int]$activeRows[0].forms -ne 1498 -or [int]$activeRows[0].learnsets -ne 116519) {
-    throw '현재 운영 게시 버전/수량이 검토된 동일-version 갱신 전제와 다릅니다.'
+  $branch = (git branch --show-current).Trim()
+  if ($branch -ne 'feat/pokemon-trainer-manager-mvp') { throw "잘못된 release branch: $branch" }
+  if (git status --porcelain) { throw 'release 전 worktree가 clean이 아닙니다.' }
+  $linkedRef = (Get-Content -LiteralPath 'supabase/.temp/project-ref' -Raw).Trim()
+  if ($linkedRef -ne 'ipbqrgsdkoqtuqgnewrs') { throw "잘못된 linked Supabase ref: $linkedRef" }
+
+  git push origin feat/pokemon-trainer-manager-mvp
+  if ($LASTEXITCODE -ne 0) { throw 'GitHub push 실패' }
+  $releaseSha = (git rev-parse HEAD).Trim()
+  $remoteSha = ((git ls-remote origin refs/heads/feat/pokemon-trainer-manager-mvp) -split '\s+')[0]
+  if ($releaseSha -notmatch '^[0-9a-f]{40}$' -or $releaseSha -ne $remoteSha) {
+    throw "local/remote SHA 불일치: local=$releaseSha remote=$remoteSha"
+  }
+  if (git status --porcelain) { throw 'push 후 worktree가 clean이 아닙니다.' }
+  ```
+
+  Do not continue to Step 7 if any check fails. This ordering is mandatory: Git commit/push and local `HEAD == remote SHA` occur before the first production write. Run Steps 6–9 in the same PowerShell session; after any interruption, re-enter the reviewed 40-hex `$releaseSha` and repeat every clean/ref/local/remote equality check before resuming.
+
+- [ ] **Step 7: Migrate and publish the same-version authenticated artifact**
+
+  Re-check the pinned SHA, clean worktree, and linked ref. Before migration, read the active publication and require the reviewed existing same-version snapshot. After migration, run the same preflight again and require byte-for-byte-equivalent JSON. Do not require new base-stat/Tera/Gmax rows at this point because the option publication has not populated them yet. The reviewed pre-publication counts are `types=18`, `species=1,025`, `forms=1,498`, `abilities=310`, `items=332`, `natures=25`, `evolutions=480`, `typeMatchups=324`, `moves=826`, `formAbilities=3,055`, and `learnsets=116,519`.
+
+  ```powershell
+  if ((git rev-parse HEAD).Trim() -ne $releaseSha -or (git status --porcelain)) {
+    throw '검증된 release SHA/worktree 상태가 변경되었습니다.'
+  }
+  $currentRemoteSha = ((git ls-remote origin refs/heads/feat/pokemon-trainer-manager-mvp) -split '\s+')[0]
+  if ($currentRemoteSha -ne $releaseSha) { throw 'production write 직전 remote SHA가 변경되었습니다.' }
+  if ((Get-Content -LiteralPath 'supabase/.temp/project-ref' -Raw).Trim() -ne 'ipbqrgsdkoqtuqgnewrs') {
+    throw 'linked Supabase project가 검토된 ref와 다릅니다.'
+  }
+  function Invoke-LinkedJsonQuery([string]$Sql) {
+    $queryFile = Join-Path ([IO.Path]::GetTempPath()) ("pokemon-linked-query-{0}.sql" -f [guid]::NewGuid().ToString('N'))
+    try {
+      [IO.File]::WriteAllText($queryFile, $Sql, [Text.UTF8Encoding]::new($false))
+      $raw = pnpm exec supabase db query --linked --agent no --output-format json --file $queryFile
+      $queryExit = $LASTEXITCODE
+      if ($queryExit -ne 0) { throw "linked read-only SQL 실패: $queryExit" }
+      return @($raw | ConvertFrom-Json)
+    } finally {
+      if (Test-Path -LiteralPath $queryFile) { Remove-Item -LiteralPath $queryFile -Force }
+      if (Test-Path -LiteralPath "$queryFile.tmp") { Remove-Item -LiteralPath "$queryFile.tmp" -Force }
+    }
   }
 
+  # Do not trust an earlier ignored artifact. Re-import and validate immediately before release.
+  $referenceSource = (Resolve-Path '<trusted-source-folder>').Path
+  pnpm data:import -- --source $referenceSource --output .reference-data/candidate.json
+  if ($LASTEXITCODE -ne 0) { throw 'fresh candidate import 실패' }
+  pnpm data:validate -- --input .reference-data/candidate.json --report .reference-data/validation-report.json
+  if ($LASTEXITCODE -ne 0) { throw 'fresh candidate validation 실패' }
+  $candidate = Get-Content -LiteralPath '.reference-data/candidate.json' -Raw | ConvertFrom-Json
+  $validationArtifact = Get-Content -LiteralPath '.reference-data/validation-report.json' -Raw | ConvertFrom-Json
+  if (-not $validationArtifact.valid -or $candidate.version -ne 'Cobbleverse 1.7.42+Cobblemon 1.7.3' -or
+      $validationArtifact.version -ne $candidate.version -or @($validationArtifact.sourceDiagnostics).Count -ne 2 -or
+      @($candidate.battleOnlyDiagnostics).Count -ne 9 -or
+      @($candidate.forms).Count -ne 1498 -or @($candidate.forms | Where-Object { -not $_.isBattleOnly }).Count -ne 1334 -or
+      @($candidate.forms | Where-Object isBattleOnly).Count -ne 164 -or @($candidate.teraTypes).Count -ne 19 -or
+      @($candidate.formTeraOptions).Count -ne 25184 -or @($candidate.formGigantamaxOptions).Count -ne 42) {
+    throw 'fresh candidate/version/battle counts가 검토된 release와 다릅니다.'
+  }
+  $expectedArtifactRows = [ordered]@{
+    types=18; species=1025; forms=1498; abilities=310; moves=826; learnsets=116519;
+    items=615; evolutions=602; formAbilities=3055; natures=25; typeMatchups=324
+  }
+  foreach ($entry in $expectedArtifactRows.GetEnumerator()) {
+    if ([int]$validationArtifact.rowCounts.PSObject.Properties[$entry.Key].Value -ne $entry.Value) {
+      throw "fresh validation row count 불일치: $($entry.Key)"
+    }
+  }
+  $candidateFileHash = (Get-FileHash -LiteralPath '.reference-data/candidate.json' -Algorithm SHA256).Hash
+  $reportFileHash = (Get-FileHash -LiteralPath '.reference-data/validation-report.json' -Algorithm SHA256).Hash
+  $candidateDigest = [string]$validationArtifact.candidateDigest
+  if ($candidateDigest -notmatch '^[0-9a-f]{64}$') { throw 'candidate digest가 없습니다.' }
+
+  $activeSql = @"
+  select publication.id, publication.version,
+    (select count(*) from public.reference_types where publication_id = publication.id and is_active) as types,
+    (select count(*) from public.reference_species where publication_id = publication.id and is_active) as species,
+    (select count(*) from public.reference_forms where publication_id = publication.id and is_active) as forms,
+    (select count(*) from public.reference_abilities where publication_id = publication.id and is_active) as abilities,
+    (select count(*) from public.reference_items where publication_id = publication.id and is_active) as items,
+    (select count(*) from public.reference_natures where publication_id = publication.id and is_active) as natures,
+    (select count(*) from public.reference_evolution_rules where publication_id = publication.id) as evolutions,
+    (select count(*) from public.reference_type_matchups where publication_id = publication.id) as type_matchups,
+    (select count(*) from public.reference_moves where publication_id = publication.id and is_active) as moves,
+    (select count(*) from public.reference_form_abilities where publication_id = publication.id) as form_abilities,
+    (select count(*) from public.reference_move_learnsets where publication_id = publication.id) as learnsets
+  from public.data_publications as publication where publication.status = 'active'
+  "@
+  $expectedBefore = [ordered]@{
+    types=18; species=1025; forms=1498; abilities=310; items=332; natures=25;
+    evolutions=480; type_matchups=324; moves=826; form_abilities=3055; learnsets=116519
+  }
+  function Read-ActiveSnapshot {
+    $rows = @(Invoke-LinkedJsonQuery $activeSql)
+    if ($rows.Count -ne 1 -or $rows[0].version -ne 'Cobbleverse 1.7.42+Cobblemon 1.7.3') {
+      throw '운영 active publication이 검토된 동일 version 한 건이 아닙니다.'
+    }
+    foreach ($entry in $expectedBefore.GetEnumerator()) {
+      if ([int]$rows[0].PSObject.Properties[$entry.Key].Value -ne $entry.Value) {
+        throw "운영 사전 수량 불일치: $($entry.Key)"
+      }
+    }
+    return $rows[0]
+  }
+  $beforeMigration = Read-ActiveSnapshot
+  $dryRun = pnpm exec supabase db push --dry-run --linked --skip-vault --agent no --yes 2>&1
+  if ($LASTEXITCODE -ne 0) { throw 'production migration dry-run 실패' }
+  $pendingMigrations = @([regex]::Matches(
+    ($dryRun -join "`n"),
+    '(?<![0-9A-Za-z_])([0-9]{14}_[0-9A-Za-z_-]+\.sql)(?![0-9A-Za-z_-])'
+  ) | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+  if ($pendingMigrations.Count -ne 1 -or $pendingMigrations[0] -ne '20260824123000_pokemon_battle_data.sql') {
+    throw "검토되지 않은 migration pending set: $($pendingMigrations -join ',')"
+  }
+  pnpm exec supabase db push --linked --skip-vault --agent no --yes
+  if ($LASTEXITCODE -ne 0) { throw 'production migration 실패' }
+  $migrationRows = @(Invoke-LinkedJsonQuery "select count(*)::int as applied from supabase_migrations.schema_migrations where version='20260824123000'")
+  if ($migrationRows.Count -ne 1 -or [int]$migrationRows[0].applied -ne 1) {
+    throw '검토된 migration version이 remote history에 없습니다.'
+  }
+  $afterMigration = Read-ActiveSnapshot
+  if (($beforeMigration | ConvertTo-Json -Compress) -ne ($afterMigration | ConvertTo-Json -Compress)) {
+    throw 'migration이 기존 active publication/version/counts를 변경했습니다.'
+  }
+  ```
+
+  Generate a new authenticated core SQL file for this release only. Execute that exact file with `--file`, then publish options from the same candidate/source. Never reuse `.reference-data/core-publication.sql` or another earlier artifact. Always remove both final and `.tmp` in `finally`:
+
+  ```powershell
+  $validationArtifact = Get-Content -LiteralPath '.reference-data/validation-report.json' -Raw | ConvertFrom-Json
+  $candidateDigest = [string]$validationArtifact.candidateDigest
+  if ($candidateDigest -notmatch '^[0-9a-f]{64}$') { throw 'candidate digest가 없습니다.' }
   $coreSql = Join-Path ([IO.Path]::GetTempPath()) ("pokemon-core-publication-{0}.sql" -f [guid]::NewGuid().ToString('N'))
+  $coreSqlTmp = "$coreSql.tmp"
   try {
     pnpm data:publish:core -- --input .reference-data/candidate.json --source $referenceSource --output $coreSql
-    if ($LASTEXITCODE -ne 0) { throw '인증된 핵심 게시 SQL 생성 실패' }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $coreSql) -or (Test-Path -LiteralPath $coreSqlTmp)) {
+      throw 'fresh authenticated 핵심 게시 SQL 생성 실패'
+    }
     $coreSqlHash = (Get-FileHash -LiteralPath $coreSql -Algorithm SHA256).Hash
-    pnpm exec supabase db query --linked --file $coreSql
+    pnpm exec supabase db query --linked --agent no --file $coreSql
     if ($LASTEXITCODE -ne 0) { throw '핵심 게시 SQL 실행 실패' }
-    if ((Get-FileHash -LiteralPath $coreSql -Algorithm SHA256).Hash -ne $coreSqlHash) { throw '게시 SQL 파일이 실행 전후 변경되었습니다.' }
+    if ((Get-FileHash -LiteralPath $coreSql -Algorithm SHA256).Hash -ne $coreSqlHash) {
+      throw '게시 SQL 파일이 실행 전후 변경되었습니다.'
+    }
+    if ((Get-FileHash -LiteralPath '.reference-data/candidate.json' -Algorithm SHA256).Hash -ne $candidateFileHash -or
+        (Get-FileHash -LiteralPath '.reference-data/validation-report.json' -Algorithm SHA256).Hash -ne $reportFileHash) {
+      throw 'core 게시 중 candidate/report 파일이 변경되었습니다.'
+    }
+    $productionApiUrl = ([string]$env:SUPABASE_URL).TrimEnd('/')
+    if ($productionApiUrl -ne 'https://ipbqrgsdkoqtuqgnewrs.supabase.co' -or
+        [string]::IsNullOrWhiteSpace($env:SUPABASE_SERVICE_ROLE_KEY)) {
+      throw 'option publisher의 production Supabase URL/key precondition 실패'
+    }
     pnpm data:publish:option-filters -- --input .reference-data/candidate.json --source $referenceSource
     if ($LASTEXITCODE -ne 0) { throw '옵션 기준데이터 게시 실패' }
+    if ((Get-FileHash -LiteralPath '.reference-data/candidate.json' -Algorithm SHA256).Hash -ne $candidateFileHash -or
+        (Get-FileHash -LiteralPath '.reference-data/validation-report.json' -Algorithm SHA256).Hash -ne $reportFileHash -or
+        (Get-FileHash -LiteralPath $coreSql -Algorithm SHA256).Hash -ne $coreSqlHash) {
+      throw 'option 게시 중 release artifact가 변경되었습니다.'
+    }
   } finally {
-    if (Test-Path -LiteralPath $coreSql) { Remove-Item -LiteralPath $coreSql -Force }
+    foreach ($artifact in @($coreSql, $coreSqlTmp)) {
+      if (Test-Path -LiteralPath $artifact) {
+        Remove-Item -LiteralPath $artifact -Force -ErrorAction SilentlyContinue
+      }
+    }
+    $remainingCoreArtifacts = @($coreSql, $coreSqlTmp) | Where-Object { Test-Path -LiteralPath $_ }
+    if ($remainingCoreArtifacts.Count -ne 0) {
+      throw "core SQL release artifact cleanup 실패: $($remainingCoreArtifacts -join ', ')"
+    }
   }
   ```
 
-  Do not reuse `.reference-data/core-publication.sql` or any prior SQL file. Both publisher CLIs independently re-import `$referenceSource` and compare the full canonical candidate digest before SQL generation or the first database call. Query the active publication afterward and verify all exact counts and active RLS reads before deploying the app.
-
-- [ ] **Step 7: Commit final E2E/integration changes and push GitHub**
+  Run an executable postflight. Require the exact active version, validator and all three digests, the full published counts, `602 = 600 + 2` evolution accounting, and total staging residue zero:
 
   ```powershell
-  git add tests/e2e/pokemon-registration.spec.ts tests/e2e/stats.spec.ts
-  git commit -m "test: verify Pokemon battle data workflows"
-  git push origin feat/pokemon-trainer-manager-mvp
+  $postflightSql = @"
+  select publication.version,
+    publication.validation_report -> 'valid' = 'true'::jsonb as validator_valid,
+    publication.validation_report ->> 'candidateDigest' as candidate_digest,
+    publication.validation_report #>> '{authentication,candidateDigest}' as authenticated_candidate_digest,
+    publication.validation_report #>> '{authentication,trustedSourceDigest}' as trusted_source_digest,
+    (publication.validation_report #>> '{authentication,evolutionAccounting,sourceCount}')::int as source_evolutions,
+    (publication.validation_report #>> '{authentication,evolutionAccounting,publishableCount}')::int as publishable_evolutions,
+    (publication.validation_report #>> '{authentication,evolutionAccounting,excludedMissingTargetCount}')::int as missing_targets,
+    (select count(*) from public.reference_types where publication_id=publication.id and is_active) as types,
+    (select count(*) from public.reference_species where publication_id=publication.id and is_active) as species,
+    (select count(*) from public.reference_forms where publication_id=publication.id and is_active) as forms,
+    (select count(*) from public.reference_forms where publication_id=publication.id and is_active and not is_battle_only) as playable,
+    (select count(*) from public.reference_forms where publication_id=publication.id and is_active and is_battle_only) as battle_only,
+    (select count(*) from public.reference_forms where publication_id=publication.id and is_active and base_hp is not null and base_attack is not null and base_defense is not null and base_special_attack is not null and base_special_defense is not null and base_speed is not null) as complete_stats,
+    (select count(*) from public.reference_abilities where publication_id=publication.id and is_active) as abilities,
+    (select count(*) from public.reference_items where publication_id=publication.id and is_active) as items,
+    (select count(*) from public.reference_natures where publication_id=publication.id and is_active) as natures,
+    (select count(*) from public.reference_evolution_rules where publication_id=publication.id) as evolutions,
+    (select count(*) from public.reference_type_matchups where publication_id=publication.id) as type_matchups,
+    (select count(*) from public.reference_moves where publication_id=publication.id and is_active) as moves,
+    (select count(*) from public.reference_form_abilities where publication_id=publication.id) as form_abilities,
+    (select count(*) from public.reference_move_learnsets where publication_id=publication.id) as learnsets,
+    (select count(*) from public.reference_tera_types where publication_id=publication.id and is_active) as tera_types,
+    (select count(*) from public.reference_form_tera_options where publication_id=publication.id) as form_tera,
+    (select count(*) from public.reference_form_gigantamax_options where publication_id=publication.id) as gmax,
+    (select count(*) from public.reference_option_filter_publication_staging) as staging
+  from public.data_publications as publication where publication.status='active'
+  "@
+  $postRows = @(Invoke-LinkedJsonQuery $postflightSql)
+  if ($postRows.Count -ne 1) { throw 'active publication은 정확히 한 건이어야 합니다.' }
+  $post = $postRows[0]
+  $expectedAfter = [ordered]@{
+    types=18; species=1025; forms=1498; playable=1334; battle_only=164; complete_stats=1498;
+    abilities=310; items=615; natures=25; evolutions=600; type_matchups=324; moves=826;
+    form_abilities=3055; learnsets=116519; tera_types=19; form_tera=25184; gmax=42; staging=0;
+    source_evolutions=602; publishable_evolutions=600; missing_targets=2
+  }
+  if ($post.version -ne 'Cobbleverse 1.7.42+Cobblemon 1.7.3' -or -not $post.validator_valid) {
+    throw 'postflight version/validator 불일치'
+  }
+  foreach ($name in @('candidate_digest','authenticated_candidate_digest','trusted_source_digest')) {
+    if ($post.PSObject.Properties[$name].Value -ne $candidateDigest) { throw "postflight digest 불일치: $name" }
+  }
+  foreach ($entry in $expectedAfter.GetEnumerator()) {
+    if ([int]$post.PSObject.Properties[$entry.Key].Value -ne $entry.Value) { throw "postflight count 불일치: $($entry.Key)" }
+  }
   ```
 
-  Verify `git rev-parse HEAD` equals `git ls-remote origin refs/heads/feat/pokemon-trainer-manager-mvp`.
+  Finally execute an authenticated-role RLS gate; exit nonzero on any invisible active reference collection:
+
+  ```powershell
+  $rlsSql = @"
+  begin;
+  set local role authenticated;
+  select set_config('request.jwt.claim.role','authenticated',true), set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000000001',true);
+  do `$rls`$
+  declare active_id uuid;
+  begin
+    select id into strict active_id from public.data_publications where status='active';
+    if (select count(*) from public.reference_types where publication_id=active_id and is_active) <> 18
+       or (select count(*) from public.reference_species where publication_id=active_id and is_active) <> 1025
+       or (select count(*) from public.reference_forms where publication_id=active_id and is_active) <> 1498
+       or (select count(*) from public.reference_forms where publication_id=active_id and is_active and not is_battle_only) <> 1334
+       or (select count(*) from public.reference_forms where publication_id=active_id and is_active and is_battle_only) <> 164
+       or (select count(*) from public.reference_forms where publication_id=active_id and is_active and base_hp is not null and base_attack is not null and base_defense is not null and base_special_attack is not null and base_special_defense is not null and base_speed is not null) <> 1498
+       or (select count(*) from public.reference_abilities where publication_id=active_id and is_active) <> 310
+       or (select count(*) from public.reference_items where publication_id=active_id and is_active) <> 615
+       or (select count(*) from public.reference_natures where publication_id=active_id and is_active) <> 25
+       or (select count(*) from public.reference_evolution_rules where publication_id=active_id) <> 600
+       or (select count(*) from public.reference_type_matchups where publication_id=active_id) <> 324
+       or (select count(*) from public.reference_moves where publication_id=active_id and is_active) <> 826
+       or (select count(*) from public.reference_form_abilities where publication_id=active_id) <> 3055
+       or (select count(*) from public.reference_move_learnsets where publication_id=active_id) <> 116519
+       or (select count(*) from public.reference_tera_types where publication_id=active_id and is_active) <> 19
+       or (select count(*) from public.reference_form_tera_options where publication_id=active_id) <> 25184
+       or (select count(*) from public.reference_form_gigantamax_options where publication_id=active_id) <> 42 then
+      raise exception 'authenticated RLS active-reference read mismatch';
+    end if;
+  end
+  `$rls`$;
+  rollback;
+  "@
+  $rlsSqlFile = Join-Path ([IO.Path]::GetTempPath()) ("pokemon-rls-postflight-{0}.sql" -f [guid]::NewGuid().ToString('N'))
+  try {
+    [IO.File]::WriteAllText($rlsSqlFile, $rlsSql, [Text.UTF8Encoding]::new($false))
+    pnpm exec supabase db query --linked --agent no --file $rlsSqlFile
+    if ($LASTEXITCODE -ne 0) { throw 'authenticated RLS postflight 실패' }
+    $rlsPostflight = 'passed'
+  } finally {
+    if (Test-Path -LiteralPath $rlsSqlFile) { Remove-Item -LiteralPath $rlsSqlFile -Force }
+    if (Test-Path -LiteralPath "$rlsSqlFile.tmp") { Remove-Item -LiteralPath "$rlsSqlFile.tmp" -Force }
+  }
+  ```
 
 - [ ] **Step 8: Deploy and verify Vercel production**
 
-  Deploy the same HEAD to project `prj_B8AdbunhhoUgT1MYU8dXhcFr036b` under team `team_UqNAq7UGoE0hxsNKrcaUekZQ`. Require deployment state `READY`, open `https://pokemon-trainer-manager.vercel.app`, register one disposable Pokémon through all seven steps, verify list/detail/Tera/Gmax/stats/PP, then delete the disposable row and prove zero test residue. If the application deployment fails, restore the prior Vercel production deployment while leaving the backward-compatible nullable/defaulted database additions in place; never delete existing user rows as rollback.
+  Immediately before deploy, re-check the linked project, clean worktree, local/remote SHA, and linked Vercel project metadata. Deploy only that SHA. After the approved deployment command/API returns `$deploymentIdOrUrl`, query Vercel deployment metadata and require the exact project/team, production target, `READY`, and source commit:
+
+  ```powershell
+  $currentRemoteSha = ((git ls-remote origin refs/heads/feat/pokemon-trainer-manager-mvp) -split '\s+')[0]
+  $vercelProject = Get-Content -LiteralPath '.vercel/project.json' -Raw | ConvertFrom-Json
+  if ((git rev-parse HEAD).Trim() -ne $releaseSha -or $currentRemoteSha -ne $releaseSha -or
+      (git status --porcelain) -or (Get-Content -LiteralPath 'supabase/.temp/project-ref' -Raw).Trim() -ne 'ipbqrgsdkoqtuqgnewrs' -or
+      $vercelProject.projectId -ne 'prj_B8AdbunhhoUgT1MYU8dXhcFr036b' -or
+      $vercelProject.orgId -ne 'team_UqNAq7UGoE0hxsNKrcaUekZQ') {
+    throw 'deploy 직전 SHA/worktree/project precondition 실패'
+  }
+  if ([string]::IsNullOrWhiteSpace($env:VERCEL_TOKEN) -or [string]::IsNullOrWhiteSpace($deploymentIdOrUrl)) {
+    throw 'Vercel deployment verification 입력이 없습니다.'
+  }
+  $deploymentLookup = $deploymentIdOrUrl.Trim()
+  $deploymentUri = $null
+  if ([uri]::TryCreate($deploymentLookup, [UriKind]::Absolute, [ref]$deploymentUri)) {
+    $deploymentLookup = $deploymentUri.Host
+  }
+  $deploymentKey = [uri]::EscapeDataString($deploymentLookup)
+  $deployment = Invoke-RestMethod -Method Get -Headers @{ Authorization = "Bearer $env:VERCEL_TOKEN" } `
+    -Uri "https://api.vercel.com/v13/deployments/$deploymentKey`?teamId=team_UqNAq7UGoE0hxsNKrcaUekZQ"
+  if ($deployment.projectId -ne 'prj_B8AdbunhhoUgT1MYU8dXhcFr036b' -or
+      $deployment.ownerId -ne 'team_UqNAq7UGoE0hxsNKrcaUekZQ' -or $deployment.target -ne 'production' -or
+      $deployment.readyState -ne 'READY' -or $deployment.gitSource.sha -ne $releaseSha) {
+    throw 'Vercel READY/source SHA/project 검증 실패'
+  }
+  ```
+
+  Never run Playwright/local E2E with production Supabase variables. Generate a nonce first, enter an exact disposable email containing that nonce, and create only that account in the deployed app after `$smokeStartedAt` is recorded. Manually verify the seven-step flow, list/detail, Tera/Gmax, stats, and PP. Do not paste an auth or Pokémon UUID: the service-role cleanup resolves the exact email, verifies its creation time, and reads its owned Pokémon IDs before any deletion. Set `$smokeFlowPassed = 'passed'` only after every UI check succeeds.
+
+  Before server cleanup, sign out the disposable session and clear its browser cookies/local storage because deleting an auth user does not revoke an already-issued JWT. Confirm that separately from the UI checks. The service-role client recursively enumerates only the server-verified `<smoke-user-uuid>/` prefix inside `private-pokemon-images`, removes the returned paths, hard-deletes that auth user so FK cascades finish, and only then deletes audit rows for that exact UUID. It never deletes `storage.objects` directly. Cleanup/API/temp-file failures are collected so the six-category residue query still runs whenever the authenticated identity was resolved; if no identity can be authenticated, stop without deleting any user. Flow and browser assertions run only after cleanup and proof:
+
+  ```powershell
+  $smokeFlowPassed = 'not-passed'
+  $smokeBrowserCleared = 'not-cleared'
+  $smokeNonce = "pokemon-release-smoke-$([guid]::NewGuid().ToString('N'))"
+  $smokeEmail = (Read-Host "사용할 disposable email 입력(반드시 $smokeNonce 포함)").Trim().ToLowerInvariant()
+  if ([string]::IsNullOrWhiteSpace($smokeEmail) -or -not $smokeEmail.Contains($smokeNonce)) {
+    throw 'smoke email이 release nonce와 결합되지 않았습니다.'
+  }
+  $smokeStartedAt = [DateTimeOffset]::UtcNow
+  $verifiedSmokePokemonIds = @()
+  $cleanupRows = @()
+  try {
+    # 지금부터 deployed app에서 위 email로 계정 하나만 만들고 정확히 한 마리를 저장·검증한다.
+    $smokeConfirmation = (Read-Host '7단계/목록/상세/Tera/Gmax/stats/PP를 모두 확인했다면 VERIFIED 입력').Trim()
+    if ($smokeConfirmation -cne 'VERIFIED') { throw 'production smoke 수동 검증이 완료되지 않았습니다.' }
+    $smokeFlowPassed = 'passed'
+    $browserConfirmation = (Read-Host 'sign-out 후 해당 사이트 cookie/local storage를 지웠다면 SIGNED_OUT_AND_CLEARED 입력').Trim()
+    if ($browserConfirmation -cne 'SIGNED_OUT_AND_CLEARED') { throw 'disposable browser session 정리가 확인되지 않았습니다.' }
+    $smokeBrowserCleared = 'cleared'
+  } finally {
+    $cleanupScript = Join-Path '.reference-data' ("smoke-cleanup-{0}.ts" -f [guid]::NewGuid().ToString('N'))
+    $cleanupResult = "$cleanupScript.result.json"
+    New-Item -ItemType Directory -Path '.reference-data' -Force | Out-Null
+    $cleanupErrors = @()
+    try {
+      $normalizedSupabaseUrl = $env:SUPABASE_URL.TrimEnd('/')
+      if ($normalizedSupabaseUrl -ne 'https://ipbqrgsdkoqtuqgnewrs.supabase.co' -or
+          [string]::IsNullOrWhiteSpace($env:SUPABASE_SERVICE_ROLE_KEY)) {
+        throw 'production smoke cleanup Supabase precondition 실패'
+      }
+      [IO.File]::WriteAllText($cleanupScript, @'
+  import { writeFileSync } from "node:fs";
+  import { createClient } from "@supabase/supabase-js";
+
+  const url = process.env.SUPABASE_URL?.replace(/\/+$/u, "");
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const email = process.env.SMOKE_EMAIL?.toLowerCase();
+  const nonce = process.env.SMOKE_NONCE;
+  const startedAt = process.env.SMOKE_STARTED_AT;
+  const resultPath = process.env.SMOKE_RESULT_PATH;
+  if (url !== "https://ipbqrgsdkoqtuqgnewrs.supabase.co" || !key || !email || !nonce ||
+      !startedAt || !resultPath || !email.includes(nonce)) {
+    throw new Error("production smoke cleanup environment precondition failed");
+  }
+  const client = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const matchingUsers = [];
+  for (let page = 1; ; page += 1) {
+    const { data, error } = await client.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw error;
+    matchingUsers.push(...data.users.filter((user) => user.email?.toLowerCase() === email));
+    if (data.users.length < 1000) break;
+  }
+  if (matchingUsers.length !== 1) throw new Error("exact disposable auth user was not uniquely resolved");
+  const user = matchingUsers[0];
+  if (!user.created_at || Date.parse(user.created_at) < Date.parse(startedAt)) {
+    throw new Error("resolved auth user predates this smoke run");
+  }
+  const { data: pokemonRows, error: pokemonError } = await client
+    .from("owned_pokemon").select("id").eq("user_id", user.id);
+  if (pokemonError) throw pokemonError;
+  const pokemonIds = (pokemonRows ?? []).map((row) => row.id);
+  writeFileSync(resultPath, JSON.stringify({ userId: user.id, email, createdAt: user.created_at, pokemonIds }), { flag: "wx" });
+
+  const cleanupErrors: unknown[] = [];
+  const bucket = client.storage.from("private-pokemon-images");
+  const collect = async (prefix: string): Promise<string[]> => {
+    const paths: string[] = [];
+    for (let offset = 0; ; offset += 100) {
+      const { data, error } = await bucket.list(prefix, { limit: 100, offset, sortBy: { column: "name", order: "asc" } });
+      if (error) throw error;
+      for (const entry of data ?? []) {
+        const path = `${prefix}/${entry.name}`;
+        if (!path.startsWith(`${user.id}/`)) throw new Error("storage prefix escaped disposable user");
+        if (entry.id === null) paths.push(...await collect(path));
+        else paths.push(path);
+      }
+      if ((data?.length ?? 0) < 100) break;
+    }
+    return paths;
+  };
+  let storageRemoved = false;
+  try {
+    const paths = await collect(user.id);
+    for (let offset = 0; offset < paths.length; offset += 100) {
+      const { error } = await bucket.remove(paths.slice(offset, offset + 100));
+      if (error) throw error;
+    }
+    storageRemoved = true;
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  let authDeleted = false;
+  if (storageRemoved) {
+    try {
+      const { error } = await client.auth.admin.deleteUser(user.id);
+      if (error) throw error;
+      authDeleted = true;
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  } else {
+    cleanupErrors.push(new Error("auth deletion skipped because storage cleanup failed"));
+  }
+  if (authDeleted) {
+    try {
+      const { error } = await client.from("audit_events").delete().eq("user_id", user.id);
+      if (error) throw error;
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  } else {
+    cleanupErrors.push(new Error("audit deletion skipped because auth deletion failed"));
+  }
+  if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "production smoke cleanup failed");
+  '@)
+      $env:SUPABASE_URL = $normalizedSupabaseUrl
+      $env:SMOKE_EMAIL = $smokeEmail
+      $env:SMOKE_NONCE = $smokeNonce
+      $env:SMOKE_STARTED_AT = $smokeStartedAt.ToString('o')
+      $env:SMOKE_RESULT_PATH = $cleanupResult
+      pnpm exec tsx $cleanupScript
+      if ($LASTEXITCODE -ne 0) { throw "smoke cleanup command exit $LASTEXITCODE" }
+    } catch {
+      $cleanupErrors += $_.Exception.Message
+    } finally {
+      foreach ($name in @('SMOKE_EMAIL','SMOKE_NONCE','SMOKE_STARTED_AT','SMOKE_RESULT_PATH')) {
+        Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+      }
+      if (Test-Path -LiteralPath $cleanupScript) {
+        Remove-Item -LiteralPath $cleanupScript -Force -ErrorAction SilentlyContinue
+      }
+      if (Test-Path -LiteralPath $cleanupScript) {
+        $cleanupErrors += 'smoke cleanup 임시 스크립트 삭제 실패'
+      }
+    }
+
+    $cleanupIdentity = $null
+    if (Test-Path -LiteralPath $cleanupResult) {
+      try {
+        $cleanupIdentity = Get-Content -LiteralPath $cleanupResult -Raw | ConvertFrom-Json
+      } catch {
+        $cleanupErrors += $_.Exception.Message
+      } finally {
+        Remove-Item -LiteralPath $cleanupResult -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $cleanupResult) { $cleanupErrors += 'smoke cleanup result 삭제 실패' }
+      }
+    } else {
+      $cleanupErrors += 'server-authenticated smoke identity를 확인하지 못해 삭제하지 않았습니다.'
+    }
+
+    if ($cleanupIdentity) {
+      $parsedSmokeUserId = [guid]::Empty
+      if (-not [guid]::TryParse($cleanupIdentity.userId, [ref]$parsedSmokeUserId) -or
+          $cleanupIdentity.email.ToLowerInvariant() -ne $smokeEmail) {
+        $cleanupErrors += 'authenticated cleanup identity 응답이 올바르지 않습니다.'
+      } else {
+        $smokePokemonLiterals = @()
+        $verifiedSmokePokemonIds = @($cleanupIdentity.pokemonIds)
+        foreach ($pokemonId in $verifiedSmokePokemonIds) {
+          $parsedPokemonId = [guid]::Empty
+          if (-not [guid]::TryParse($pokemonId, [ref]$parsedPokemonId)) {
+            $cleanupErrors += 'authenticated Pokemon UUID가 올바르지 않습니다.'
+          } else {
+            $smokePokemonLiterals += "'$parsedPokemonId'::uuid"
+          }
+        }
+        $smokePokemonArray = if ($smokePokemonLiterals.Count) { 'array[' + ($smokePokemonLiterals -join ',') + ']::uuid[]' } else { 'array[]::uuid[]' }
+        $cleanupProofSql = @"
+  select
+    (select count(*) from auth.users where id='$parsedSmokeUserId'::uuid) as auth_users,
+    (select count(*) from public.owned_pokemon where user_id='$parsedSmokeUserId'::uuid) as owned,
+    (select count(*) from public.owned_pokemon_moves where owned_pokemon_id=any($smokePokemonArray)) as moves,
+    (select count(*) from public.owned_pokemon_images where owned_pokemon_id=any($smokePokemonArray)) as images,
+    (select count(*) from public.audit_events where user_id='$parsedSmokeUserId'::uuid) as audit,
+    (select count(*) from storage.objects where bucket_id='private-pokemon-images' and name like '$parsedSmokeUserId/%') as storage
+  "@
+        try {
+          $cleanupRows = @(Invoke-LinkedJsonQuery $cleanupProofSql)
+          if ($cleanupRows.Count -ne 1) { throw 'production smoke cleanup 조회 실패' }
+          foreach ($name in @('auth_users','owned','moves','images','audit','storage')) {
+            if ([int]$cleanupRows[0].PSObject.Properties[$name].Value -ne 0) { throw "production smoke residue: $name" }
+          }
+        } catch {
+          $cleanupErrors += $_.Exception.Message
+        }
+      }
+    }
+    if ($cleanupErrors.Count) { throw ($cleanupErrors -join '; ') }
+  }
+  if ($smokeFlowPassed -ne 'passed' -or $smokeBrowserCleared -ne 'cleared' -or
+      @($verifiedSmokePokemonIds).Count -ne 1) {
+    throw 'production smoke UI/browser 검증 또는 서버 유도 Pokemon 1건 검증이 완료되지 않았습니다.'
+  }
+  ```
+
+  If application deployment fails, restore the prior Vercel production deployment while leaving the backward-compatible nullable/defaulted database additions in place; never delete existing user rows as rollback.
 
 - [ ] **Step 9: Record final evidence**
 
-  Capture commit SHA, migration version, publication counts, deployment ID/URL, production smoke-test result, and clean `git status --short`. Do not call the deployment complete if any live check was skipped.
+  Re-run the ref/SHA/clean checks and write evidence only to ignored `.reference-data`; do not create a tracked evidence commit after the SHA that was published and deployed. Record the migration, candidate/report/core hashes, pre/post-migration snapshots, exact postflight/RLS result, Vercel source SHA/READY metadata, and all six cleanup zeros:
+
+  ```powershell
+  $finalRemoteSha = ((git ls-remote origin refs/heads/feat/pokemon-trainer-manager-mvp) -split '\s+')[0]
+  if ((git rev-parse HEAD).Trim() -ne $releaseSha -or $finalRemoteSha -ne $releaseSha -or
+      (git status --porcelain) -or (Get-Content -LiteralPath 'supabase/.temp/project-ref' -Raw).Trim() -ne 'ipbqrgsdkoqtuqgnewrs') {
+    throw 'final evidence SHA/ref/worktree precondition 실패'
+  }
+  if ($cleanupRows.Count -ne 1 -or $rlsPostflight -ne 'passed' -or $smokeFlowPassed -ne 'passed' -or
+      $smokeBrowserCleared -ne 'cleared' -or @($verifiedSmokePokemonIds).Count -ne 1 -or
+      $deployment.readyState -ne 'READY' -or
+      $deployment.gitSource.sha -ne $releaseSha -or
+      @('auth_users','owned','moves','images','audit','storage').Where({
+        [int]$cleanupRows[0].PSObject.Properties[$_].Value -ne 0
+      }).Count -ne 0) {
+    throw '필수 live evidence가 완전하지 않습니다.'
+  }
+  $evidence = [ordered]@{
+    releaseSha=$releaseSha
+    remoteSha=$finalRemoteSha
+    linkedProjectRef='ipbqrgsdkoqtuqgnewrs'
+    migration='20260824123000_pokemon_battle_data.sql'
+    pendingMigrations=$pendingMigrations
+    candidateDigest=$candidateDigest
+    candidateFileSha256=$candidateFileHash
+    validationReportSha256=$reportFileHash
+    coreSqlSha256=$coreSqlHash
+    preMigrationSnapshot=$beforeMigration
+    postMigrationSnapshot=$afterMigration
+    publicationPostflight=$post
+    rlsPostflight=$rlsPostflight
+    smokeBrowserCleared=$smokeBrowserCleared
+    smokePokemonCount=@($verifiedSmokePokemonIds).Count
+    deploymentId=$deployment.id
+    deploymentUrl=$deployment.url
+    deploymentOwnerId=$deployment.ownerId
+    deploymentState=$deployment.readyState
+    deploymentSourceSha=$deployment.gitSource.sha
+    smokeFlow=$smokeFlowPassed
+    smokeCleanup=$cleanupRows[0]
+  }
+  $evidencePath = ".reference-data/release-evidence-$releaseSha.json"
+  $evidenceTmp = "$evidencePath.tmp"
+  if ((Test-Path -LiteralPath $evidencePath) -or (Test-Path -LiteralPath $evidenceTmp)) {
+    throw 'release evidence artifact가 이미 존재합니다.'
+  }
+  try {
+    [IO.File]::WriteAllText($evidenceTmp, ($evidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    [IO.File]::Move($evidenceTmp, $evidencePath)
+  } finally {
+    if (Test-Path -LiteralPath $evidenceTmp) { Remove-Item -LiteralPath $evidenceTmp -Force }
+  }
+  if (git status --porcelain) { throw 'ignored evidence 기록 후 tracked worktree가 변경되었습니다.' }
+  ```
+
+  Do not call the deployment complete if any live check was skipped.

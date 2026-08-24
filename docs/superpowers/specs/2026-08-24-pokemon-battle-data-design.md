@@ -249,10 +249,10 @@
 ## 11. 배포 순서와 복구
 
 1. 기준데이터와 DB 동작을 로컬 테스트에서 먼저 검증한다.
-2. 추가 열·기준 테이블·RLS·RPC 마이그레이션을 적용한다.
-3. 확장된 폼·성격·테라·거다이맥스 데이터를 게시하고 개수를 검증한다.
-4. 애플리케이션 커밋을 GitHub에 푸시한다.
-5. Vercel production을 배포하고 실제 사용자 흐름을 검증한다.
+2. 애플리케이션 커밋을 GitHub에 푸시하고 clean local `HEAD`가 원격 branch SHA와 정확히 같은지 확인한다.
+3. 동일 active version의 기존 수량을 확인하고, 검토된 단일 마이그레이션만 dry-run한 뒤 추가 열·기준 테이블·RLS·RPC를 적용한다.
+4. 같은 version에 fresh authenticated core SQL과 동일 후보의 옵션 데이터를 차례로 게시하고 exact postflight/RLS를 검증한다.
+5. 같은 원격 SHA를 Vercel production에 배포하고 일회성 사용자 흐름 및 6종 cleanup residue를 검증한다.
 
 새 보유 포켓몬 열에는 안전한 기본값을 사용하므로 기존 행은 유지된다. 문제가 생기면 UI 배포를 이전 버전으로 되돌려도 새 nullable/기본값 열이 기존 코드와 충돌하지 않는다. 이미 기록된 사용자 데이터를 삭제하는 롤백은 수행하지 않는다.
 

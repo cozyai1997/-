@@ -9,7 +9,6 @@ import {
   createCandidateValidationArtifact,
   verifyCandidateValidationArtifact,
 } from '../../scripts/data/authenticate-reference-data'
-import { publishAuthenticatedCandidateAgainstTrustedDataset } from '../../scripts/data/publish-reference-data'
 import { createProductionReferenceCandidate } from '../fixtures/reference-data/production-candidate'
 
 describe('운영 기준데이터 원본 인증', () => {
@@ -95,23 +94,6 @@ describe('운영 기준데이터 원본 인증', () => {
 
     expect(() => verifyCandidateValidationArtifact(candidate, artifact))
       .toThrow('기준데이터 검증 실패')
-  })
-
-  it('data:publish는 source와 candidate가 함께 바뀌어도 이전 보고서를 재사용하지 않는다', () => {
-    const original = createProductionReferenceCandidate()
-    const artifact = createCandidateValidationArtifact(original)
-    const candidate = structuredClone(original)
-    candidate.items[0].descriptionKo = '새 source와 일치하지만 이전 보고서와 다른 설명이다.'
-    const trustedDataset = structuredClone(candidate)
-    const current = { activePublicationId: 'existing', publications: [] }
-
-    expect(() => publishAuthenticatedCandidateAgainstTrustedDataset(
-      current,
-      candidate,
-      artifact,
-      trustedDataset,
-    )).toThrow('validation-report:candidate-digest')
-    expect(current).toEqual({ activePublicationId: 'existing', publications: [] })
   })
 
   it.each([

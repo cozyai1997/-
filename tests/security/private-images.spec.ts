@@ -69,6 +69,16 @@ describeLocalSupabase('사용자별 비공개 포켓몬 이미지', () => {
     if (objectPath) await admin.storage.from(bucket).remove([objectPath])
     if (pokemonId) await admin.from('owned_pokemon').delete().eq('id', pokemonId)
     for (const id of userIds) await admin.auth.admin.deleteUser(id)
+    if (userIds.length) {
+      const deletedAudits = await admin.from('audit_events').delete().in('user_id', userIds)
+      if (deletedAudits.error) throw deletedAudits.error
+      const auditResidue = await admin.from('audit_events')
+        .select('id', { count: 'exact', head: true })
+        .in('user_id', userIds)
+      if (auditResidue.error || auditResidue.count !== 0) {
+        throw auditResidue.error ?? new Error(`이미지 보안 감사 잔존: ${auditResidue.count}`)
+      }
+    }
     if (formId) await admin.from('reference_forms').delete().eq('id', formId)
     if (speciesId) await admin.from('reference_species').delete().eq('id', speciesId)
   })

@@ -146,9 +146,13 @@ alter table public.reference_option_filter_publication_staging
     'form_tera_option', 'form_gigantamax_option'
   ));
 
-create or replace function public.replace_pokemon_option_filter_reference_data(
+drop function if exists public.replace_pokemon_option_filter_reference_data(uuid, uuid);
+
+create function public.replace_pokemon_option_filter_reference_data(
   p_publication_id uuid,
-  p_batch_id uuid
+  p_batch_id uuid,
+  p_candidate_digest text,
+  p_expected_version text
 )
 returns void
 language plpgsql
@@ -168,9 +172,72 @@ declare
   staged_gmax_options integer;
   target_tera_rows integer;
   applied integer;
+  target_version text;
+  target_row_counts jsonb;
+  target_validation_report jsonb;
 begin
-  if not exists (select 1 from public.data_publications where id = p_publication_id and status = 'active') then
+  select version, row_counts, validation_report
+  into target_version, target_row_counts, target_validation_report
+  from public.data_publications
+  where id = p_publication_id and status = 'active'
+  for update;
+  if not found then
     raise invalid_parameter_value using message = 'target publication must be active';
+  end if;
+  if p_candidate_digest !~ '^[0-9a-f]{64}$' then
+    raise invalid_parameter_value using message = 'candidate digest must be lowercase SHA-256';
+  end if;
+  if target_version is distinct from p_expected_version
+    or target_validation_report ->> 'version' is distinct from p_expected_version
+  then
+    raise invalid_parameter_value using message = 'authenticated publication version mismatch';
+  end if;
+  if target_validation_report -> 'valid' is distinct from 'true'::jsonb
+    or target_validation_report ->> 'candidateDigest' is distinct from p_candidate_digest
+    or target_validation_report #>> '{authentication,method}' is distinct from 'trusted-source-reimport-sha256'
+    or target_validation_report #>> '{authentication,candidateDigest}' is distinct from p_candidate_digest
+    or target_validation_report #>> '{authentication,trustedSourceDigest}' is distinct from p_candidate_digest
+  then
+    raise invalid_parameter_value using message = 'authenticated candidate digest mismatch';
+  end if;
+  if target_validation_report #> '{authentication,evolutionAccounting,sourceCount}' is distinct from '602'::jsonb
+    or target_validation_report #> '{authentication,evolutionAccounting,publishableCount}' is distinct from '600'::jsonb
+    or target_validation_report #> '{authentication,evolutionAccounting,excludedMissingTargetCount}' is distinct from '2'::jsonb
+  then
+    raise invalid_parameter_value using message = 'authenticated evolution accounting mismatch';
+  end if;
+  if target_row_counts -> 'types' is distinct from '18'::jsonb
+    or target_row_counts -> 'species' is distinct from '1025'::jsonb
+    or target_row_counts -> 'forms' is distinct from '1498'::jsonb
+    or target_row_counts -> 'abilities' is distinct from '310'::jsonb
+    or target_row_counts -> 'items' is distinct from '615'::jsonb
+    or target_row_counts -> 'natures' is distinct from '25'::jsonb
+    or target_row_counts -> 'evolutions' is distinct from '600'::jsonb
+    or target_row_counts -> 'typeMatchups' is distinct from '324'::jsonb
+    or target_validation_report #> '{rowCounts,types}' is distinct from '18'::jsonb
+    or target_validation_report #> '{rowCounts,species}' is distinct from '1025'::jsonb
+    or target_validation_report #> '{rowCounts,forms}' is distinct from '1498'::jsonb
+    or target_validation_report #> '{rowCounts,abilities}' is distinct from '310'::jsonb
+    or target_validation_report #> '{rowCounts,moves}' is distinct from '826'::jsonb
+    or target_validation_report #> '{rowCounts,learnsets}' is distinct from '116519'::jsonb
+    or target_validation_report #> '{rowCounts,items}' is distinct from '615'::jsonb
+    or target_validation_report #> '{rowCounts,natures}' is distinct from '25'::jsonb
+    or target_validation_report #> '{rowCounts,evolutions}' is distinct from '602'::jsonb
+    or target_validation_report #> '{rowCounts,formAbilities}' is distinct from '3055'::jsonb
+    or target_validation_report #> '{rowCounts,typeMatchups}' is distinct from '324'::jsonb
+  then
+    raise invalid_parameter_value using message = 'authenticated core count metadata mismatch';
+  end if;
+  if (select count(*) from public.reference_types where publication_id = p_publication_id and is_active) <> 18
+    or (select count(*) from public.reference_species where publication_id = p_publication_id and is_active) <> 1025
+    or (select count(*) from public.reference_forms where publication_id = p_publication_id and is_active) <> 1498
+    or (select count(*) from public.reference_abilities where publication_id = p_publication_id and is_active) <> 310
+    or (select count(*) from public.reference_items where publication_id = p_publication_id and is_active) <> 615
+    or (select count(*) from public.reference_natures where publication_id = p_publication_id and is_active) <> 25
+    or (select count(*) from public.reference_evolution_rules where publication_id = p_publication_id) <> 600
+    or (select count(*) from public.reference_type_matchups where publication_id = p_publication_id) <> 324
+  then
+    raise invalid_parameter_value using message = 'active core reference count mismatch';
   end if;
 
   select
@@ -533,9 +600,9 @@ begin
   where batch_id = p_batch_id and publication_id = p_publication_id;
 end;
 $$;
-revoke all on function public.replace_pokemon_option_filter_reference_data(uuid, uuid)
+revoke all on function public.replace_pokemon_option_filter_reference_data(uuid, uuid, text, text)
   from public, anon, authenticated;
-grant execute on function public.replace_pokemon_option_filter_reference_data(uuid, uuid) to service_role;
+grant execute on function public.replace_pokemon_option_filter_reference_data(uuid, uuid, text, text) to service_role;
 
 create function public.get_pokemon_option_filter_reference_digest(p_publication_id uuid)
 returns jsonb

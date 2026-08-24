@@ -29,6 +29,8 @@ const ids = {
 }
 
 let rotationOwnerId: string | null = null
+const candidateDigest = 'a'.repeat(64)
+const publicationVersion = `atomic-${ids.publication}`
 
 const canonicalTeraIdentifiers = [
   'normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel',
@@ -69,9 +71,32 @@ function setupSql(): string {
   return `do $setup$
 begin
   insert into public.data_publications (
-    id, version, status, validated_at, activated_at
+    id, version, status, row_counts, validation_report, validated_at, activated_at
   ) values (
-    '${ids.publication}', 'atomic-${ids.publication}', 'active', now(), now()
+    '${ids.publication}', '${publicationVersion}', 'active',
+    jsonb_build_object(
+      'types', 18, 'species', 1025, 'forms', 1498, 'abilities', 310,
+      'items', 615, 'natures', 25, 'evolutions', 600, 'typeMatchups', 324
+    ),
+    jsonb_build_object(
+      'valid', true,
+      'version', '${publicationVersion}',
+      'candidateDigest', '${candidateDigest}',
+      'rowCounts', jsonb_build_object(
+        'types', 18, 'species', 1025, 'forms', 1498, 'abilities', 310,
+        'moves', 826, 'learnsets', 116519, 'items', 615, 'evolutions', 602,
+        'formAbilities', 3055, 'natures', 25, 'typeMatchups', 324
+      ),
+      'authentication', jsonb_build_object(
+        'method', 'trusted-source-reimport-sha256',
+        'candidateDigest', '${candidateDigest}',
+        'trustedSourceDigest', '${candidateDigest}',
+        'evolutionAccounting', jsonb_build_object(
+          'sourceCount', 602, 'publishableCount', 600, 'excludedMissingTargetCount', 2
+        )
+      )
+    ),
+    now(), now()
   );
   insert into public.data_publications (id, version, status)
     values ('${ids.retiredPublication}', 'atomic-retired-${ids.retiredPublication}', 'retired');
@@ -80,12 +105,23 @@ begin
   ) values (
     '${ids.type}', '${ids.publication}', 'atomic-${ids.type}', '노말', '#A8A77A', 0
   );
+  insert into public.reference_types (publication_id, identifier, name_ko, color_hex, sort_order)
+  select '${ids.publication}', 'atomic-type-${ids.publication}-' || value,
+    '추가 타입 ' || value, '#A8A77A', value
+  from generate_series(1, 17) as value;
   insert into public.reference_species (
     id, publication_id, national_dex_number, identifier, name_ko, description_ko
   ) values (
     '${ids.species}', '${ids.publication}', ${dex}, 'atomic-${ids.species}',
     '이브이', '원자 교체 검증용'
   );
+  insert into public.reference_species (
+    publication_id, national_dex_number, identifier, name_ko, description_ko, primary_type_id
+  )
+  select '${ids.publication}', 5000 + value,
+    'atomic-species-${ids.publication}-' || value,
+    '추가 종 ' || value, '추가 종 설명 ' || value, '${ids.type}'
+  from generate_series(1, 1024) as value;
   insert into public.reference_forms (
     id, publication_id, species_id, identifier, name_ko, is_default
   ) values (
@@ -109,6 +145,31 @@ begin
     '${ids.ability}', '${ids.publication}', 'atomic-${ids.ability}',
     '적응력', '같은 타입 기술이 강해진다.'
   );
+  insert into public.reference_abilities (publication_id, identifier, name_ko, description_ko)
+  select '${ids.publication}', 'atomic-ability-${ids.publication}-' || value,
+    '추가 특성 ' || value, '추가 특성 설명 ' || value
+  from generate_series(1, 309) as value;
+  insert into public.reference_items (publication_id, identifier, name_ko, description_ko)
+  select '${ids.publication}', 'atomic-item-${ids.publication}-' || value,
+    '추가 도구 ' || value, '추가 도구 설명 ' || value
+  from generate_series(1, 615) as value;
+  insert into public.reference_natures (publication_id, identifier, name_ko)
+  select '${ids.publication}', 'atomic-nature-' || value || '-${ids.publication}', '성격 ' || value
+  from generate_series(0, 24) as value;
+  insert into public.reference_evolution_rules (
+    publication_id, from_form_id, to_form_id, condition_ko, sort_order
+  )
+  select '${ids.publication}', '${ids.baseForm}', '${ids.form}',
+    '검증 진화 조건 ' || value, value
+  from generate_series(0, 599) as value;
+  insert into public.reference_type_matchups (
+    publication_id, attacking_type_id, defending_type_id, multiplier
+  )
+  select '${ids.publication}', attacking.id, defending.id, 1
+  from public.reference_types as attacking
+  cross join public.reference_types as defending
+  where attacking.publication_id = '${ids.publication}'
+    and defending.publication_id = '${ids.publication}';
   insert into public.reference_moves (
     id, publication_id, identifier, name_ko, description_ko,
     type_id, damage_class, pp
@@ -331,82 +392,176 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
 
   afterAll(async () => {
     if (!admin) return
-    const failures: string[] = []
-    const collect = (label: string, error: { message?: string } | null) => {
-      if (error) failures.push(`${label}: ${error.message ?? '알 수 없는 오류'}`)
+    if (rotationOwnerId) {
+      const ownerCleanup = await admin.auth.admin.deleteUser(rotationOwnerId)
+      if (ownerCleanup.error) throw ownerCleanup.error
+      const auditCleanup = await admin.from('audit_events').delete().eq('user_id', rotationOwnerId)
+      if (auditCleanup.error) throw auditCleanup.error
+      const auditResidue = await admin.from('audit_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', rotationOwnerId)
+      if (auditResidue.error || auditResidue.count !== 0) {
+        throw auditResidue.error ?? new Error(`원자 교체 감사 잔존: ${auditResidue.count}`)
+      }
     }
-    if (rotationOwnerId) collect('회전 소유자 삭제', (await admin.auth.admin.deleteUser(rotationOwnerId)).error)
-    collect('시험 게시본 은퇴', (await admin
-      .from('data_publications')
-      .update({ status: 'retired' })
-      .eq('id', ids.publication)).error)
-    if (previousActivePublicationId) {
-      collect('기존 게시본 복구', (await admin
-        .from('data_publications')
-        .update({ status: 'active' })
-        .eq('id', previousActivePublicationId)).error)
-    }
-    collect('스테이징 삭제', (await admin
-      .from('reference_option_filter_publication_staging')
-      .delete()
-      .eq('publication_id', ids.publication)).error)
-    collect('폼 특성 삭제', (await admin
-      .from('reference_form_abilities')
-      .delete()
-      .eq('publication_id', ids.publication)).error)
-    collect('기술 습득 삭제', (await admin
-      .from('reference_move_learnsets')
-      .delete()
-      .eq('publication_id', ids.publication)).error)
-    collect('거다이맥스 관계 삭제', (await admin
-      .from('reference_form_gigantamax_options')
-      .delete()
-      .eq('publication_id', ids.publication)).error)
-    collect('테라 타입 관계 삭제', (await admin
-      .from('reference_form_tera_options')
-      .delete()
-      .eq('publication_id', ids.publication)).error)
-    collect('테라 타입 삭제', (await admin
-      .from('reference_tera_types')
-      .delete()
-      .eq('publication_id', ids.publication)).error)
-    collect('성격 삭제', (await admin
-      .from('reference_natures')
-      .delete()
-      .eq('publication_id', ids.publication)).error)
-    collect('기술 삭제', (await admin
-      .from('reference_moves')
-      .delete()
-      .eq('publication_id', ids.publication)).error)
-    collect('특성 삭제', (await admin.from('reference_abilities').delete().eq('id', ids.ability)).error)
-    collect('모습 링크 해제', (await admin
-      .from('reference_forms')
-      .update({ base_form_id: null })
-      .eq('publication_id', ids.publication)).error)
-    collect('은퇴 회전 모습 삭제', (await admin.from('reference_forms').delete().eq('id', ids.rotationForm)).error)
-    collect('모습 삭제', (await admin
-      .from('reference_forms')
-      .delete()
-      .eq('publication_id', ids.publication)).error)
-    collect('은퇴 회전 종 삭제', (await admin.from('reference_species').delete().eq('id', ids.rotationSpecies)).error)
-    collect('종 삭제', (await admin.from('reference_species').delete().eq('id', ids.species)).error)
-    collect('타입 삭제', (await admin.from('reference_types').delete().eq('id', ids.type)).error)
-    collect('게시본 삭제', (await admin
-      .from('data_publications')
-      .delete()
-      .in('id', [ids.publication, ids.retiredPublication])).error)
 
-    const residue = await Promise.all([
-      admin.from('reference_option_filter_publication_staging').select('id', { count: 'exact', head: true }).eq('publication_id', ids.publication),
-      admin.from('reference_moves').select('id', { count: 'exact', head: true }).eq('publication_id', ids.publication),
-      admin.from('reference_forms').select('id', { count: 'exact', head: true }).eq('publication_id', ids.publication),
-      admin.from('data_publications').select('id', { count: 'exact', head: true }).in('id', [ids.publication, ids.retiredPublication]),
-    ])
-    for (const [index, result] of residue.entries()) {
-      collect(`잔존 조회 ${index + 1}`, result.error)
-      if ((result.count ?? 0) > 0) failures.push(`잔존 조회 ${index + 1}: ${result.count}개`)
+    const restorePrevious = previousActivePublicationId
+      ? `update public.data_publications set status = 'active' where id = '${previousActivePublicationId}';`
+      : ''
+    runLocalSql(`do $cleanup$
+declare
+  residue_count bigint;
+begin
+  update public.data_publications set status = 'retired' where id = '${ids.publication}';
+  ${restorePrevious}
+
+  delete from public.reference_option_filter_publication_staging
+    where publication_id in ('${ids.publication}', '${ids.retiredPublication}');
+  delete from public.reference_form_gigantamax_options
+    where publication_id in ('${ids.publication}', '${ids.retiredPublication}');
+  delete from public.reference_form_tera_options
+    where publication_id in ('${ids.publication}', '${ids.retiredPublication}');
+  delete from public.reference_tera_types
+    where publication_id in ('${ids.publication}', '${ids.retiredPublication}');
+  delete from public.reference_form_abilities where publication_id = '${ids.publication}';
+  delete from public.reference_move_learnsets where publication_id = '${ids.publication}';
+  delete from public.reference_moves where publication_id = '${ids.publication}';
+  delete from public.reference_evolution_rules where publication_id = '${ids.publication}';
+  delete from public.reference_type_matchups where publication_id = '${ids.publication}';
+  delete from public.reference_items where publication_id = '${ids.publication}';
+  delete from public.reference_natures where publication_id = '${ids.publication}';
+  delete from public.reference_abilities where publication_id = '${ids.publication}';
+  update public.reference_forms set base_form_id = null
+    where publication_id in ('${ids.publication}', '${ids.retiredPublication}');
+  delete from public.reference_forms
+    where publication_id in ('${ids.publication}', '${ids.retiredPublication}');
+  delete from public.reference_species
+    where publication_id in ('${ids.publication}', '${ids.retiredPublication}');
+  delete from public.reference_types where publication_id = '${ids.publication}';
+  delete from public.data_publications
+    where id in ('${ids.publication}', '${ids.retiredPublication}');
+
+  select
+    (select count(*) from public.reference_option_filter_publication_staging
+      where publication_id in ('${ids.publication}', '${ids.retiredPublication}'))
+    + (select count(*) from public.reference_moves where publication_id = '${ids.publication}')
+    + (select count(*) from public.reference_forms
+      where publication_id in ('${ids.publication}', '${ids.retiredPublication}'))
+    + (select count(*) from public.data_publications
+      where id in ('${ids.publication}', '${ids.retiredPublication}'))
+    into residue_count;
+  if residue_count <> 0 then
+    raise exception '원자 교체 픽스처 잔존: %', residue_count;
+  end if;
+end
+$cleanup$;`)
+  })
+
+  it('active 핵심 게시본과 다른 candidate digest는 staging 교체 전에 거부한다', async () => {
+    const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+      p_publication_id: ids.publication,
+      p_batch_id: randomUUID(),
+      p_candidate_digest: 'b'.repeat(64),
+      p_expected_version: publicationVersion,
+    })
+
+    expect(replacement.error?.message).toContain('authenticated candidate digest mismatch')
+  })
+
+  it('DB trustedSourceDigest가 변조되면 올바른 candidate digest도 거부한다', async () => {
+    runLocalSql(`update public.data_publications
+      set validation_report = jsonb_set(
+        validation_report, '{authentication,trustedSourceDigest}', to_jsonb('${'b'.repeat(64)}'::text)
+      ) where id = '${ids.publication}';`)
+    try {
+      const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+        p_publication_id: ids.publication,
+        p_batch_id: randomUUID(),
+        p_candidate_digest: candidateDigest,
+        p_expected_version: publicationVersion,
+      })
+      expect(replacement.error?.message).toContain('authenticated candidate digest mismatch')
+    } finally {
+      runLocalSql(`update public.data_publications
+        set validation_report = jsonb_set(
+          validation_report, '{authentication,trustedSourceDigest}', to_jsonb('${candidateDigest}'::text)
+        ) where id = '${ids.publication}';`)
     }
-    if (failures.length) throw new Error(`원자 교체 픽스처 정리 실패\n${failures.join('\n')}`)
+  })
+
+  it('호출 후보 version이 active 인증 보고서와 다르면 거부한다', async () => {
+    const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+      p_publication_id: ids.publication,
+      p_batch_id: randomUUID(),
+      p_candidate_digest: candidateDigest,
+      p_expected_version: '다른 버전',
+    })
+    expect(replacement.error?.message).toContain('authenticated publication version mismatch')
+  })
+
+  it('core count metadata가 어긋나면 교체 전에 거부한다', async () => {
+    const before = await admin.from('data_publications')
+      .select('row_counts').eq('id', ids.publication).single()
+    expect(before.error).toBeNull()
+    const tampered = { ...(before.data?.row_counts as Record<string, unknown>), types: 17 }
+    expect((await admin.from('data_publications')
+      .update({ row_counts: tampered }).eq('id', ids.publication)).error).toBeNull()
+    try {
+      const metadataMismatch = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+        p_publication_id: ids.publication,
+        p_batch_id: randomUUID(),
+        p_candidate_digest: candidateDigest,
+        p_expected_version: publicationVersion,
+      })
+      expect(metadataMismatch.error?.message).toContain('authenticated core count metadata mismatch')
+    } finally {
+      expect((await admin.from('data_publications')
+        .update({ row_counts: before.data!.row_counts }).eq('id', ids.publication)).error).toBeNull()
+    }
+  })
+
+  it('인증 보고서의 raw option count가 어긋나면 staging 검사 전에 거부한다', async () => {
+    runLocalSql(`update public.data_publications
+      set validation_report = jsonb_set(validation_report, '{rowCounts,moves}', '825'::jsonb)
+      where id = '${ids.publication}';`)
+    try {
+      const metadataMismatch = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+        p_publication_id: ids.publication,
+        p_batch_id: randomUUID(),
+        p_candidate_digest: candidateDigest,
+        p_expected_version: publicationVersion,
+      })
+      expect(metadataMismatch.error?.message).toContain('authenticated core count metadata mismatch')
+    } finally {
+      runLocalSql(`update public.data_publications
+        set validation_report = jsonb_set(validation_report, '{rowCounts,moves}', '826'::jsonb)
+        where id = '${ids.publication}';`)
+    }
+  })
+
+  it('실제 active core 행 수가 어긋나면 교체 전에 거부한다', async () => {
+    expect((await admin.from('reference_abilities')
+      .update({ is_active: false }).eq('id', ids.ability)).error).toBeNull()
+    try {
+      const actualMismatch = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+        p_publication_id: ids.publication,
+        p_batch_id: randomUUID(),
+        p_candidate_digest: candidateDigest,
+        p_expected_version: publicationVersion,
+      })
+      expect(actualMismatch.error?.message).toContain('active core reference count mismatch')
+    } finally {
+      expect((await admin.from('reference_abilities')
+        .update({ is_active: true }).eq('id', ids.ability)).error).toBeNull()
+    }
+  })
+
+  it('기존 2인수 RPC overload는 남아 있지 않다', async () => {
+    const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
+      p_publication_id: ids.publication,
+      p_batch_id: randomUUID(),
+    } as never)
+    expect(replacement.error?.code).toBe('PGRST202')
   })
 
   it('후반 Tera 옵션 PK 실패가 먼저 적용한 move/base-link까지 롤백한다', async () => {
@@ -414,6 +569,8 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
     const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
       p_publication_id: ids.publication,
       p_batch_id: ids.failedBatch,
+      p_candidate_digest: candidateDigest,
+      p_expected_version: publicationVersion,
     })
     expect(replacement.error?.code).toBe('23505')
 
@@ -443,6 +600,8 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
       const canonicalSet = await admin.rpc('replace_pokemon_option_filter_reference_data', {
         p_publication_id: ids.publication,
         p_batch_id: batchId,
+        p_candidate_digest: candidateDigest,
+        p_expected_version: publicationVersion,
       })
       expect(canonicalSet.error?.message).toContain('canonical 19')
       runLocalSql(`update public.reference_option_filter_publication_staging
@@ -454,6 +613,8 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
       const invalidOrder = await admin.rpc('replace_pokemon_option_filter_reference_data', {
         p_publication_id: ids.publication,
         p_batch_id: batchId,
+        p_candidate_digest: candidateDigest,
+        p_expected_version: publicationVersion,
       })
       expect(invalidOrder.error?.message).toContain('identifier-to-sort-order')
       runLocalSql(`update public.reference_option_filter_publication_staging
@@ -462,6 +623,8 @@ describeLocalSupabase('포켓몬 선택 필터 원자 교체', () => {
       const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
         p_publication_id: ids.publication,
         p_batch_id: batchId,
+        p_candidate_digest: candidateDigest,
+        p_expected_version: publicationVersion,
       })
       expect(replacement.error).toBeNull()
     }
@@ -569,6 +732,8 @@ $swap$;`)
     const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
       p_publication_id: ids.publication,
       p_batch_id: ids.secondSuccessfulBatch,
+      p_candidate_digest: candidateDigest,
+      p_expected_version: publicationVersion,
     })
     expect(replacement.error).toBeNull()
     const [rotated, ownedAfter, retiredOptions, obsolete] = await Promise.all([
@@ -583,7 +748,9 @@ $swap$;`)
     expect(ownedAfter.data).toEqual({ tera_type_id: normal.data!.id })
     expect(retiredOptions.count).toBe(0)
     expect(obsolete.data).toEqual({ publication_id: ids.publication, is_active: false })
+  }, 60_000)
 
+  it('같은 인증 후보를 다시 교체해도 결과가 멱등이고 staging이 남지 않는다', async () => {
     const beforeIdempotent = await admin.rpc('get_pokemon_option_filter_reference_digest', {
       p_publication_id: ids.publication,
     })
@@ -592,6 +759,8 @@ $swap$;`)
     const idempotent = await admin.rpc('replace_pokemon_option_filter_reference_data', {
       p_publication_id: ids.publication,
       p_batch_id: ids.thirdSuccessfulBatch,
+      p_candidate_digest: candidateDigest,
+      p_expected_version: publicationVersion,
     })
     expect(idempotent.error).toBeNull()
     const [afterIdempotent, stagingResidue] = await Promise.all([
@@ -608,6 +777,8 @@ $swap$;`)
     const replacement = await admin.rpc('replace_pokemon_option_filter_reference_data', {
       p_publication_id: ids.retiredPublication,
       p_batch_id: randomUUID(),
+      p_candidate_digest: candidateDigest,
+      p_expected_version: `atomic-retired-${ids.retiredPublication}`,
     })
     expect(replacement.error?.message).toContain('active')
   })

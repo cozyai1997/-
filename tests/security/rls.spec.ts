@@ -20,6 +20,7 @@ type TestIdentity = {
 const describeLocalSupabase = process.env.RUN_SUPABASE_INTEGRATION === '1' ? describe : describe.skip
 
 const identities: string[] = []
+const auditIdentityIds: string[] = []
 let admin: SupabaseClient
 let alice: TestIdentity
 let bob: TestIdentity
@@ -81,6 +82,7 @@ async function createIdentity(
   }
 
   identities.push(created.data.user.id)
+  auditIdentityIds.push(created.data.user.id)
 
   const client = createClient(environment.API_URL, environment.ANON_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -188,6 +190,10 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
         const deleted = await admin.auth.admin.deleteUser(id)
         collect('사용자 삭제', deleted.error)
       }
+      collect('사용자 감사 삭제', (await admin
+        .from('audit_events')
+        .delete()
+        .in('user_id', auditIdentityIds)).error)
       collect('테라 옵션 삭제', (await admin.from('reference_form_tera_options').delete().in('publication_id', [referencePublicationId, retiredReferencePublicationId])).error)
       collect('거다이맥스 옵션 삭제', (await admin.from('reference_form_gigantamax_options').delete().in('publication_id', [referencePublicationId, retiredReferencePublicationId])).error)
       collect('테라 타입 삭제', (await admin.from('reference_tera_types').delete().in('publication_id', [referencePublicationId, retiredReferencePublicationId])).error)
@@ -202,6 +208,7 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
         admin.from('reference_tera_types').select('id', { count: 'exact', head: true }).in('publication_id', [referencePublicationId, retiredReferencePublicationId]),
         admin.from('reference_forms').select('id', { count: 'exact', head: true }).in('id', [formId, gigantamaxFormId]),
         admin.from('data_publications').select('id', { count: 'exact', head: true }).in('id', [referencePublicationId, retiredReferencePublicationId]),
+        admin.from('audit_events').select('id', { count: 'exact', head: true }).in('user_id', auditIdentityIds),
       ])
       residue.forEach((result, index) => {
         collect(`잔존 조회 ${index + 1}`, result.error)
@@ -334,6 +341,8 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
     const replacement = await bob.client.rpc('replace_pokemon_option_filter_reference_data', {
       p_publication_id: referencePublicationId,
       p_batch_id: randomUUID(),
+      p_candidate_digest: 'a'.repeat(64),
+      p_expected_version: `rls-active-${referencePublicationId}`,
     })
 
     expect(visible.error).toBeNull()

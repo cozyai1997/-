@@ -11,7 +11,6 @@ import {
   type ExpectedRowCounts,
   type ReferenceDataset,
 } from '@/features/localization/reference-data-validation'
-import { buildValidatedCandidateState } from '../../scripts/data/publish-reference-data'
 
 const fixtureCounts: ExpectedRowCounts = {
   types: 1,
@@ -450,46 +449,14 @@ describe('한국어 기준 데이터 공개 검증', () => {
   })
 
   it('검증 실패 시 기존 활성 게시 버전을 유지한다', () => {
-    const dataset = englishDescriptionFixture as ReferenceDataset
     const invalidReport = validateReferenceData(englishDescriptionFixture as ReferenceDataset, {
       expectedRowCounts: fixtureCounts,
       expectedBattleRowCounts: fixtureBattleCounts,
       expectedBattleDatasetProfile: fixtureBattleProfile,
     })
-    const current = { activePublicationId: 'current-publication', publications: [] }
-
     expect(chooseActivePublicationId('current-publication', 'candidate-publication', invalidReport)).toBe(
       'current-publication',
     )
-    expect(buildValidatedCandidateState(current, dataset, invalidReport)).toBe(current)
-  })
-
-  it('검증을 통과한 후보만 새 활성 게시 상태로 원자적으로 교체한다', () => {
-    const dataset = completeFixture as ReferenceDataset
-    const report = validateReferenceData(dataset, {
-      expectedRowCounts: fixtureCounts,
-      expectedBattleRowCounts: fixtureBattleCounts,
-      expectedBattleDatasetProfile: fixtureBattleProfile,
-    })
-    const current = {
-      activePublicationId: 'current-publication',
-      publications: [
-        {
-          id: 'current-publication',
-          version: 'old-version',
-          rowCounts: fixtureCounts,
-          sourceCommits: {},
-          sha256: {},
-        },
-      ],
-    }
-
-    const next = buildValidatedCandidateState(current, dataset, report)
-
-    expect(next).not.toBe(current)
-    expect(next.activePublicationId).toMatch(/^[0-9a-f]{64}$/u)
-    expect(next.publications).toHaveLength(2)
-    expect(next.publications.at(-1)?.version).toBe('fixture-complete-v1')
   })
 
   it('전투 기준데이터의 운영 수량과 폼·테라·거다이맥스 의미 계약을 검사한다', () => {

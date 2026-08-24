@@ -73,7 +73,18 @@ test.describe.serial('비공개 포켓몬 이미지', () => {
         `${userId}/${pokemonId}/portrait.webp`,
       ])
     }
-    if (userId) await admin.auth.admin.deleteUser(userId)
+    if (userId) {
+      const deletedUser = await admin.auth.admin.deleteUser(userId)
+      if (deletedUser.error) throw deletedUser.error
+      const deletedAudits = await admin.from('audit_events').delete().eq('user_id', userId)
+      if (deletedAudits.error) throw deletedAudits.error
+      const auditResidue = await admin.from('audit_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+      if (auditResidue.error || auditResidue.count !== 0) {
+        throw auditResidue.error ?? new Error(`개인 이미지 E2E 감사 잔존: ${auditResidue.count}`)
+      }
+    }
     if (formId) await admin.from('reference_forms').delete().eq('id', formId)
     if (speciesId) await admin.from('reference_species').delete().eq('id', speciesId)
   })
