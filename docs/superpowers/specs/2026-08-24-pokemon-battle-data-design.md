@@ -199,11 +199,11 @@
 
 ## 9. 보안과 성능
 
-- 새 public 기준 테이블은 RLS를 활성화한다.
-- authenticated에는 활성 기준데이터 SELECT만, service role에는 게시 권한만 부여한다.
+- 새 public 기준 테이블은 RLS를 활성화하고, 플랫폼 기본 ACL까지 명시적으로 회수한다. `anon`은 읽을 수 없고 `anon`/`authenticated` 모두 INSERT·UPDATE·DELETE·TRUNCATE·REFERENCES·TRIGGER 권한이 없어야 한다.
+- authenticated에는 정확히 활성 기준데이터 SELECT 정책만, service role에는 게시 권한만 부여한다. 카탈로그 postflight가 세 테이블의 RLS·정책명·역할·조건과 실제 권한을 실행 가능하게 검증한다.
 - 보유 포켓몬 RLS는 기존 `auth.uid() = user_id` 소유권 규칙을 유지한다.
 - 폼·테라타입 및 폼·거다이맥스 관계 조회를 위한 복합 인덱스를 둔다.
-- RPC는 `search_path`를 고정하고 필요한 함수만 authenticated에 EXECUTE를 부여한다.
+- RPC는 `search_path`를 고정한다. 옵션 게시의 구 2인수 RPC는 존재하지 않아야 하고, 인증 digest/version을 받는 4인수 교체 RPC에는 service role만 EXECUTE할 수 있다.
 - 스텔라는 일반 타입 상성 테이블에 넣지 않아 기존 18×18 상성 324행을 보존한다.
 
 ## 10. 테스트와 완료 기준
@@ -222,8 +222,8 @@
 
 ### 10.2 Supabase 통합·보안 테스트
 
-- 기준데이터 게시의 원자성·재게시 안전성
-- 테라타입과 거다이맥스 관계 RLS
+- 기준데이터 게시의 원자성·재게시 안전성, publisher 실패와 cleanup 실패의 동시 노출
+- 테라타입과 거다이맥스 관계 RLS, 플랫폼 기본 ACL 회수, 4인수 게시 RPC의 service-role 전용 실행 권한
 - 허용되지 않는 테라타입/거다이맥스 직접 RPC 요청 거부
 - 특성·기술·테라타입·거다이맥스 인자의 트랜잭션 저장
 - 종/폼 정정 감사 이력
@@ -243,18 +243,21 @@
 - 전체 단위·통합·보안·Chromium E2E, 타입 검사, 린트, 빌드 통과
 - Supabase 마이그레이션 dry-run, DB lint, security/performance advisor 확인
 - GitHub 원격과 커밋 일치
-- Vercel production `READY`, 빌드 오류와 런타임 오류 0건
-- 일회성 운영 계정으로 등록·저장·상세·정리까지 확인하고 잔여 데이터 0건 검증
+- Vercel CLI 59.5.0 cached auth로 project/team을 확인하고, fresh `--prebuilt --prod --skip-domain` deployment가 `READY`이며 `meta.releaseCommit`이 원격 SHA와 일치하는지 검증
+- canonical alias를 바꾸기 전에 immutable staged URL에서 일회성 운영 계정으로 등록·저장·상세·정리까지 확인하고 auth/owned/moves/images/audit/storage 잔여 데이터가 모두 0인지 검증
+- staged smoke가 통과한 동일 deployment ID만 promote하고 canonical alias가 그 ID를 가리키는지 확인한다. 실패하면 사전에 고정한 이전 deployment ID로 rollback한다.
 
 ## 11. 배포 순서와 복구
 
 1. 기준데이터와 DB 동작을 로컬 테스트에서 먼저 검증한다.
 2. 애플리케이션 커밋을 GitHub에 푸시하고 clean local `HEAD`가 원격 branch SHA와 정확히 같은지 확인한다.
 3. 동일 active version의 기존 수량을 확인하고, 검토된 단일 마이그레이션만 dry-run한 뒤 추가 열·기준 테이블·RLS·RPC를 적용한다.
-4. 같은 version에 fresh authenticated core SQL과 동일 후보의 옵션 데이터를 차례로 게시하고 exact postflight/RLS를 검증한다.
-5. 같은 원격 SHA를 Vercel production에 배포하고 일회성 사용자 흐름 및 6종 cleanup residue를 검증한다.
+4. core write 직전에 전역 옵션 staging이 0임을 확인한다. 같은 version에 fresh authenticated core SQL과 동일 후보의 옵션 데이터를 차례로 게시하고 exact count/digest/RLS/catalog postflight를 검증한다.
+5. 옵션 게시가 실패하면 publisher가 자신이 생성한 caller-owned exact batch만 정리하고 전역 staging 0을 증명한다. 운영 절차는 batch 수나 version으로 소유권을 추정하지 않으며 unidentified residue를 삭제하지 않고 진단 상태를 남긴 뒤 중단한다. DB는 partial-core 상태로 기록하며 배포하지 않는다. 같은 고정 SHA·후보·원천을 다시 인증한 경우에만 재시도하고 전체 postflight를 반드시 다시 수행한다.
+6. cached-auth Vercel CLI로 기존 canonical deployment ID/URL을 고정하고 fresh production build를 `--skip-domain`으로 staged 배포한다. 같은 원격 SHA를 담은 `meta.releaseCommit`, project/team, `READY`를 검증한다.
+7. canonical alias가 여전히 이전 ID인 상태에서 staged URL의 일회성 사용자 흐름과 6종 cleanup residue 0을 검증한다. 그 동일 staged ID만 promote하고 canonical identity를 확인한다. 승격 이후 실패하면 고정한 이전 ID로 rollback한다.
 
-새 보유 포켓몬 열에는 안전한 기본값을 사용하므로 기존 행은 유지된다. 문제가 생기면 UI 배포를 이전 버전으로 되돌려도 새 nullable/기본값 열이 기존 코드와 충돌하지 않는다. 이미 기록된 사용자 데이터를 삭제하는 롤백은 수행하지 않는다.
+새 보유 포켓몬 열에는 안전한 기본값을 사용하므로 기존 행은 유지된다. UI 배포가 실패하면 Vercel canonical만 고정한 이전 deployment로 되돌리고 DB의 하위 호환 열과 게시 데이터는 유지한다. 이미 기록된 사용자 데이터를 삭제하는 롤백은 수행하지 않는다.
 
 ## 12. 비범위
 

@@ -303,7 +303,7 @@
   );
   ```
 
-  Enable RLS on all three tables. Authenticated users may SELECT only active-publication rows; anon has no access; service role gets publication privileges. Revoke PUBLIC/anon/authenticated execution from every new private or service function.
+  Enable RLS on all three tables. Explicitly revoke every table privilege inherited by `anon` and `authenticated`, then grant authenticated only active-publication SELECT and service role the publication privileges. This explicit revoke is required because platform default ACLs can otherwise leave `TRUNCATE`, `REFERENCES`, or `TRIGGER`, which RLS does not block. Revoke PUBLIC/anon/authenticated execution from every new private or service function.
 
 - [ ] **Step 4: Implement DB invariants and atomic replacement**
 
@@ -728,7 +728,7 @@
       [IO.File]::WriteAllText($queryFile, $Sql, [Text.UTF8Encoding]::new($false))
       $raw = pnpm exec supabase db query --linked --agent no --output-format json --file $queryFile
       $queryExit = $LASTEXITCODE
-      if ($queryExit -ne 0) { throw "linked read-only SQL 실패: $queryExit" }
+      if ($queryExit -ne 0) { throw "linked SQL 실패: $queryExit" }
       return @($raw | ConvertFrom-Json)
     } finally {
       if (Test-Path -LiteralPath $queryFile) { Remove-Item -LiteralPath $queryFile -Force }
@@ -819,12 +819,18 @@
   }
   ```
 
-  Generate a new authenticated core SQL file for this release only. Execute that exact file with `--file`, then publish options from the same candidate/source. Never reuse `.reference-data/core-publication.sql` or another earlier artifact. Always remove both final and `.tmp` in `finally`:
+  Before the first core write, require the global option staging table to be empty. Reserve an exclusive publication window with no concurrent option publisher. Generate a new authenticated core SQL file for this release only. Execute that exact file with `--file`, then publish options from the same candidate/source. Never reuse `.reference-data/core-publication.sql` or another earlier artifact. Always remove both final and `.tmp` in `finally`:
 
   ```powershell
   $validationArtifact = Get-Content -LiteralPath '.reference-data/validation-report.json' -Raw | ConvertFrom-Json
   $candidateDigest = [string]$validationArtifact.candidateDigest
   if ($candidateDigest -notmatch '^[0-9a-f]{64}$') { throw 'candidate digest가 없습니다.' }
+  function Assert-GlobalOptionStagingEmpty([string]$Phase) {
+    $rows = @(Invoke-LinkedJsonQuery 'select count(*)::int as staging from public.reference_option_filter_publication_staging')
+    if ($rows.Count -ne 1 -or [int]$rows[0].staging -ne 0) {
+      throw "$Phase 전역 option staging이 0이 아닙니다. 다른 publisher와 동시에 진행하지 마세요."
+    }
+  }
   $coreSql = Join-Path ([IO.Path]::GetTempPath()) ("pokemon-core-publication-{0}.sql" -f [guid]::NewGuid().ToString('N'))
   $coreSqlTmp = "$coreSql.tmp"
   try {
@@ -833,6 +839,7 @@
       throw 'fresh authenticated 핵심 게시 SQL 생성 실패'
     }
     $coreSqlHash = (Get-FileHash -LiteralPath $coreSql -Algorithm SHA256).Hash
+    Assert-GlobalOptionStagingEmpty 'core write'
     pnpm exec supabase db query --linked --agent no --file $coreSql
     if ($LASTEXITCODE -ne 0) { throw '핵심 게시 SQL 실행 실패' }
     if ((Get-FileHash -LiteralPath $coreSql -Algorithm SHA256).Hash -ne $coreSqlHash) {
@@ -848,7 +855,25 @@
       throw 'option publisher의 production Supabase URL/key precondition 실패'
     }
     pnpm data:publish:option-filters -- --input .reference-data/candidate.json --source $referenceSource
-    if ($LASTEXITCODE -ne 0) { throw '옵션 기준데이터 게시 실패' }
+    $optionExit = $LASTEXITCODE
+    if ($optionExit -ne 0) {
+      $remainingBatches = @(Invoke-LinkedJsonQuery @"
+  select staging.batch_id, staging.publication_id, publication.version, publication.status,
+    count(*)::int as staged_rows
+  from public.reference_option_filter_publication_staging staging
+  join public.data_publications publication on publication.id=staging.publication_id
+  group by staging.batch_id, staging.publication_id, publication.version, publication.status
+  order by staging.batch_id, staging.publication_id
+  "@)
+      if ($remainingBatches.Count -ne 0) {
+        $remainingBatchState = $remainingBatches | ConvertTo-Json -Depth 5 -Compress
+        Write-Warning "option 실패 후 소유권을 증명할 수 없는 staging residue: $remainingBatchState"
+        throw 'publisher의 exact-batch cleanup이 완료되지 않았습니다. 운영 절차는 batch 소유권을 추정하거나 어떤 행도 삭제하지 않습니다; partial-core/no-deploy 상태로 중단하고 별도 진단하세요.'
+      }
+      Assert-GlobalOptionStagingEmpty 'option failure cleanup'
+      throw "option publish exit $optionExit; core만 갱신된 partial-core 상태이므로 deploy 금지"
+    }
+    Assert-GlobalOptionStagingEmpty 'option success'
     if ((Get-FileHash -LiteralPath '.reference-data/candidate.json' -Algorithm SHA256).Hash -ne $candidateFileHash -or
         (Get-FileHash -LiteralPath '.reference-data/validation-report.json' -Algorithm SHA256).Hash -ne $reportFileHash -or
         (Get-FileHash -LiteralPath $coreSql -Algorithm SHA256).Hash -ne $coreSqlHash) {
@@ -866,6 +891,8 @@
     }
   }
   ```
+
+  If option publication fails after the core transaction commits, record the database as a **partial-core state**. Do not deploy and do not publish a different version or candidate. The publisher itself attempts cleanup using its caller-owned exact `batch_id + publication_id`; if that cleanup also fails, its `AggregateError` preserves both failures. The operational failure branch independently diagnoses global residue but never infers ownership from row count, version, or active status and never deletes an unidentified batch. It proves global staging zero when publisher cleanup succeeded; otherwise it surfaces the batch state and halts for separate diagnosis. Retry only from the same pinned local/remote SHA after freshly re-importing and re-authenticating the same candidate/source; full digest/count/RLS/catalog postflight remains mandatory before Step 8.
 
   Run an executable postflight. Require the exact active version, validator and all three digests, the full published counts, `602 = 600 + 2` evolution accounting, and total staging residue zero:
 
@@ -919,7 +946,81 @@
   }
   ```
 
-  Finally execute an authenticated-role RLS gate; exit nonzero on any invisible active reference collection:
+  Run a read-only catalog and privilege gate before the operating-user check. It requires RLS on all three new tables; one exact authenticated active-read policy per table; no anon SELECT; no anon/authenticated INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, or TRIGGER; the old two-argument RPC absent; and no non-owner EXECUTE grant except `service_role` on the four-argument RPC:
+
+  ```powershell
+  $catalogSql = @"
+  with expected_tables(table_name, policy_name) as (values
+    ('reference_tera_types', 'authenticated read active tera types'),
+    ('reference_form_tera_options', 'authenticated read active form tera options'),
+    ('reference_form_gigantamax_options', 'authenticated read active gigantamax options')
+  ), table_state as (
+    select expected.table_name, expected.policy_name, class.oid as table_oid,
+      class.relrowsecurity, policy.oid as policy_oid, policy.polcmd, policy.polroles,
+      policy.polwithcheck, pg_get_expr(policy.polqual, policy.polrelid) as policy_qual,
+      count(policy.oid) over (partition by expected.table_name) as policy_count
+    from expected_tables expected
+    left join pg_namespace namespace on namespace.nspname='public'
+    left join pg_class class on class.relnamespace=namespace.oid and class.relname=expected.table_name
+    left join pg_policy policy on policy.polrelid=class.oid
+  ), table_issues as (
+    select 'table:' || table_name || ':missing-or-rls' as issue from table_state
+    where table_oid is null or not coalesce(relrowsecurity,false)
+    union all select 'table:' || table_name || ':policy-count' from table_state where policy_count <> 1
+    union all select 'table:' || table_name || ':policy-contract' from table_state
+    where policy_count=1 and (
+      (select polname from pg_policy where oid=policy_oid) is distinct from policy_name
+      or polcmd is distinct from 'r' or polwithcheck is not null
+      or (select array_agg(role.rolname order by role.rolname)
+          from unnest(polroles) role_oid join pg_roles role on role.oid=role_oid)
+         is distinct from array['authenticated']::name[]
+      or regexp_replace(policy_qual,'\s+','','g') not like
+         '%publication.id=' || table_name || '.publication_id%publication.status=''active''::publication_status%'
+    )
+  ), privilege_issues as (
+    select 'privilege:' || expected.table_name || ':' || role.rolname as issue
+    from expected_tables expected cross join pg_roles role
+    where role.rolname in ('anon','authenticated') and (
+      has_table_privilege(role.oid,'public.' || expected.table_name,'insert')
+      or has_table_privilege(role.oid,'public.' || expected.table_name,'update')
+      or has_table_privilege(role.oid,'public.' || expected.table_name,'delete')
+      or has_table_privilege(role.oid,'public.' || expected.table_name,'truncate')
+      or has_table_privilege(role.oid,'public.' || expected.table_name,'references')
+      or has_table_privilege(role.oid,'public.' || expected.table_name,'trigger')
+      or (role.rolname='anon' and has_table_privilege(role.oid,'public.' || expected.table_name,'select'))
+      or (role.rolname='authenticated' and not has_table_privilege(role.oid,'public.' || expected.table_name,'select'))
+    )
+  ), rpc_state as (
+    select to_regprocedure('public.replace_pokemon_option_filter_reference_data(uuid,uuid,text,text)') as current_rpc,
+      to_regprocedure('public.replace_pokemon_option_filter_reference_data(uuid,uuid)') as old_rpc
+  ), rpc_issues as (
+    select 'rpc:signature' as issue from rpc_state where current_rpc is null or old_rpc is not null
+    union all
+    select 'rpc:execute:' || role.rolname from rpc_state cross join pg_roles role
+    where role.rolname in ('anon','authenticated','service_role') and
+      ((role.rolname='service_role') is distinct from has_function_privilege(role.oid,current_rpc,'execute'))
+    union all
+    select 'rpc:unexpected-explicit-execute' from rpc_state
+    join pg_proc function on function.oid=current_rpc
+    where exists (
+      select 1 from aclexplode(coalesce(function.proacl,acldefault('f',function.proowner))) privilege
+      where privilege.privilege_type='EXECUTE' and privilege.grantee <> function.proowner
+        and privilege.grantee <> (select oid from pg_roles where rolname='service_role')
+    )
+  )
+  select issue from table_issues
+  union all select issue from privilege_issues
+  union all select issue from rpc_issues
+  order by issue
+  "@
+  $catalogIssues = @(Invoke-LinkedJsonQuery $catalogSql)
+  if ($catalogIssues.Count -ne 0) {
+    throw "RLS/catalog privilege postflight 실패: $($catalogIssues.issue -join ', ')"
+  }
+  $rlsCatalogPostflight = 'passed'
+  ```
+
+  Finally execute an authenticated-role RLS gate inside a rolled-back transaction; exit nonzero on any invisible active reference collection:
 
   ```powershell
   $rlsSql = @"
@@ -967,42 +1068,203 @@
 
 - [ ] **Step 8: Deploy and verify Vercel production**
 
-  Immediately before deploy, re-check the linked project, clean worktree, local/remote SHA, and linked Vercel project metadata. Deploy only that SHA. After the approved deployment command/API returns `$deploymentIdOrUrl`, query Vercel deployment metadata and require the exact project/team, production target, `READY`, and source commit:
+  Use the reviewed Vercel CLI `59.5.0` with its cached login; do not require or accept a `VERCEL_TOKEN`. Pin the current canonical production deployment ID and immutable URL before creating anything. Remove only the repository's ordinary, non-link `.vercel/output`, pull production settings, then re-check the project/team link and clean local/remote release SHA. Build a fresh production prebuilt artifact and deploy it with `--skip-domain`, so the canonical alias cannot move before the staged smoke passes. The explicit `meta.releaseCommit` is authoritative because `gitSource.sha` is nullable for prebuilt deployments; cross-check optional Git metadata only when Vercel returns it:
 
   ```powershell
-  $currentRemoteSha = ((git ls-remote origin refs/heads/feat/pokemon-trainer-manager-mvp) -split '\s+')[0]
-  $vercelProject = Get-Content -LiteralPath '.vercel/project.json' -Raw | ConvertFrom-Json
-  if ((git rev-parse HEAD).Trim() -ne $releaseSha -or $currentRemoteSha -ne $releaseSha -or
-      (git status --porcelain) -or (Get-Content -LiteralPath 'supabase/.temp/project-ref' -Raw).Trim() -ne 'ipbqrgsdkoqtuqgnewrs' -or
-      $vercelProject.projectId -ne 'prj_B8AdbunhhoUgT1MYU8dXhcFr036b' -or
-      $vercelProject.orgId -ne 'team_UqNAq7UGoE0hxsNKrcaUekZQ') {
-    throw 'deploy 직전 SHA/worktree/project precondition 실패'
+  $vercelScope = 'masterasset'
+  $vercelTeamId = 'team_UqNAq7UGoE0hxsNKrcaUekZQ'
+  $vercelProjectId = 'prj_B8AdbunhhoUgT1MYU8dXhcFr036b'
+  $vercelProjectName = 'pokemon-trainer-manager'
+  $canonicalAlias = 'pokemon-trainer-manager.vercel.app'
+  $releaseBranch = 'feat/pokemon-trainer-manager-mvp'
+  if ($releaseSha -notmatch '^[0-9a-f]{40}$') { throw 'releaseSha가 고정되지 않았습니다.' }
+  $vercelVersionLines = @(& pnpm dlx vercel@59.5.0 --version)
+  if ($LASTEXITCODE -ne 0) { throw 'pinned Vercel CLI version 조회 실패' }
+  $vercelCliVersion = (($vercelVersionLines -join "`n").Trim())
+  if ($vercelCliVersion -ne '59.5.0') { throw "Vercel CLI version 불일치: $vercelCliVersion" }
+  if (-not [string]::IsNullOrWhiteSpace($env:VERCEL_TOKEN)) {
+    throw '이 절차는 VERCEL_TOKEN이 아닌 검증된 cached auth만 사용합니다.'
   }
-  if ([string]::IsNullOrWhiteSpace($env:VERCEL_TOKEN) -or [string]::IsNullOrWhiteSpace($deploymentIdOrUrl)) {
-    throw 'Vercel deployment verification 입력이 없습니다.'
+  if (-not [string]::IsNullOrWhiteSpace($env:VERCEL_ORG_ID) -and $env:VERCEL_ORG_ID -ne $vercelTeamId) {
+    throw 'VERCEL_ORG_ID가 승인된 team과 다릅니다.'
   }
-  $deploymentLookup = $deploymentIdOrUrl.Trim()
-  $deploymentUri = $null
-  if ([uri]::TryCreate($deploymentLookup, [UriKind]::Absolute, [ref]$deploymentUri)) {
-    $deploymentLookup = $deploymentUri.Host
+  if (-not [string]::IsNullOrWhiteSpace($env:VERCEL_PROJECT_ID) -and $env:VERCEL_PROJECT_ID -ne $vercelProjectId) {
+    throw 'VERCEL_PROJECT_ID가 승인된 project와 다릅니다.'
   }
-  $deploymentKey = [uri]::EscapeDataString($deploymentLookup)
-  $deployment = Invoke-RestMethod -Method Get -Headers @{ Authorization = "Bearer $env:VERCEL_TOKEN" } `
-    -Uri "https://api.vercel.com/v13/deployments/$deploymentKey`?teamId=team_UqNAq7UGoE0hxsNKrcaUekZQ"
-  if ($deployment.projectId -ne 'prj_B8AdbunhhoUgT1MYU8dXhcFr036b' -or
-      $deployment.ownerId -ne 'team_UqNAq7UGoE0hxsNKrcaUekZQ' -or $deployment.target -ne 'production' -or
-      $deployment.readyState -ne 'READY' -or $deployment.gitSource.sha -ne $releaseSha) {
-    throw 'Vercel READY/source SHA/project 검증 실패'
+
+  function Invoke-PinnedVercelJson {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+    $rawLines = @(& pnpm dlx vercel@59.5.0 @Arguments --scope $vercelScope --non-interactive)
+    if ($LASTEXITCODE -ne 0) { throw "Vercel CLI 실패(exit $LASTEXITCODE): $($Arguments -join ' ')" }
+    try { return (($rawLines -join "`n") | ConvertFrom-Json) }
+    catch { throw "Vercel JSON 파싱 실패: $($Arguments -join ' ')" }
+  }
+  function Invoke-PinnedVercel {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+    & pnpm dlx vercel@59.5.0 @Arguments --scope $vercelScope --non-interactive
+    if ($LASTEXITCODE -ne 0) { throw "Vercel CLI 실패(exit $LASTEXITCODE): $($Arguments -join ' ')" }
+  }
+  function Get-VercelProjectApi {
+    Invoke-PinnedVercelJson -Arguments @('api', "/v9/projects/${vercelProjectId}?teamId=${vercelTeamId}", '--raw')
+  }
+  function Get-VercelDeploymentApi {
+    param([Parameter(Mandatory)][string]$DeploymentId)
+    Invoke-PinnedVercelJson -Arguments @('api', "/v13/deployments/$([uri]::EscapeDataString($DeploymentId))?teamId=${vercelTeamId}", '--raw')
+  }
+  function Assert-ReleaseGitState {
+    $headSha = (& git rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'git HEAD 조회 실패' }
+    $remoteLines = @(& git ls-remote origin "refs/heads/$releaseBranch")
+    if ($LASTEXITCODE -ne 0 -or $remoteLines.Count -ne 1) { throw 'release remote SHA 조회 실패' }
+    $remoteMatch = [regex]::Match($remoteLines[0], "^([0-9a-f]{40})\s+$([regex]::Escape("refs/heads/$releaseBranch"))$")
+    $dirty = @(& git status --porcelain=v1 --untracked-files=normal)
+    if (-not $remoteMatch.Success -or $LASTEXITCODE -ne 0 -or $headSha -ne $releaseSha -or
+        $remoteMatch.Groups[1].Value -ne $releaseSha -or $dirty.Count -ne 0) {
+      throw 'release SHA/local-remote/worktree precondition 실패'
+    }
+  }
+  function Assert-VercelLinkAndTeam {
+    $link = Get-Content -LiteralPath '.vercel/project.json' -Raw | ConvertFrom-Json
+    if ($link.projectId -ne $vercelProjectId -or $link.orgId -ne $vercelTeamId -or
+        $link.projectName -ne $vercelProjectName) { throw '로컬 Vercel link 불일치' }
+    $identity = Invoke-PinnedVercelJson -Arguments @('whoami', '--json')
+    if ($identity.team.id -ne $vercelTeamId -or $identity.team.slug -ne $vercelScope) {
+      throw 'cached-auth Vercel team 불일치'
+    }
+    $remoteProject = Get-VercelProjectApi
+    if ($remoteProject.id -ne $vercelProjectId -or $remoteProject.accountId -ne $vercelTeamId -or
+        $remoteProject.name -ne $vercelProjectName) { throw '원격 Vercel project 불일치' }
+  }
+  function Get-CanonicalInspection {
+    Invoke-PinnedVercelJson -Arguments @('inspect', $canonicalAlias, '--json', '--wait', '--timeout', '3m')
+  }
+  function Assert-CanonicalDeployment {
+    param([Parameter(Mandatory)][string]$ExpectedDeploymentId)
+    $project = Get-VercelProjectApi
+    $canonical = Get-CanonicalInspection
+    if ($project.targets.production.id -ne $ExpectedDeploymentId -or $canonical.id -ne $ExpectedDeploymentId -or
+        $canonical.target -ne 'production' -or $canonical.readyState -ne 'READY' -or
+        @($canonical.aliases) -notcontains $canonicalAlias) {
+      throw "canonical alias가 예상 deployment $ExpectedDeploymentId 를 가리키지 않습니다."
+    }
+  }
+  function Remove-VerifiedVercelOutput {
+    $repoRoot = (Resolve-Path -LiteralPath '.').ProviderPath
+    $vercelRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot '.vercel'))
+    $outputPath = [IO.Path]::GetFullPath((Join-Path $vercelRoot 'output'))
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetDirectoryName($outputPath), $vercelRoot) -or
+        [IO.Path]::GetFileName($outputPath) -ne 'output') { throw 'Vercel output 삭제 대상 계산 실패' }
+    if (Test-Path -LiteralPath $outputPath) {
+      $outputItem = Get-Item -LiteralPath $outputPath -Force
+      if (-not $outputItem.PSIsContainer -or -not [string]::IsNullOrWhiteSpace([string]$outputItem.LinkType)) {
+        throw '.vercel/output이 일반 디렉터리가 아닙니다.'
+      }
+      $resolvedOutput = (Resolve-Path -LiteralPath $outputPath).ProviderPath
+      if (-not [StringComparer]::OrdinalIgnoreCase.Equals($resolvedOutput, $outputPath)) {
+        throw '.vercel/output resolved path 불일치'
+      }
+      Remove-Item -LiteralPath $resolvedOutput -Recurse -Force
+    }
+    if (Test-Path -LiteralPath $outputPath) { throw '.vercel/output 삭제 실패' }
+  }
+
+  Assert-ReleaseGitState
+  Assert-VercelLinkAndTeam
+  $previousProject = Get-VercelProjectApi
+  $previousDeploymentId = [string]$previousProject.targets.production.id
+  $previousDeploymentHost = [string]$previousProject.targets.production.url
+  $previousDeploymentUrl = "https://$previousDeploymentHost"
+  if ($previousDeploymentId -notmatch '^dpl_[A-Za-z0-9]+$' -or
+      [string]::IsNullOrWhiteSpace($previousDeploymentHost) -or
+      @($previousProject.targets.production.alias) -notcontains $canonicalAlias) {
+    throw '기존 canonical production deployment를 고정하지 못했습니다.'
+  }
+  $previousDeployment = Get-VercelDeploymentApi $previousDeploymentId
+  if ($previousDeployment.id -ne $previousDeploymentId -or $previousDeployment.url -ne $previousDeploymentHost -or
+      $previousDeployment.projectId -ne $vercelProjectId -or $previousDeployment.ownerId -ne $vercelTeamId -or
+      $previousDeployment.target -ne 'production' -or $previousDeployment.readyState -ne 'READY') {
+    throw '고정한 이전 production deployment 검증 실패'
+  }
+  Assert-CanonicalDeployment $previousDeploymentId
+
+  function Invoke-PinnedRollback {
+    Invoke-PinnedVercel -Arguments @('rollback', $previousDeploymentId, '--yes', '--timeout', '3m')
+    Assert-CanonicalDeployment $previousDeploymentId
+    $rolledBackDeployment = Get-VercelDeploymentApi $previousDeploymentId
+    if (@($rolledBackDeployment.alias) -notcontains $canonicalAlias) {
+      throw 'rollback 후 canonical alias API 검증 실패'
+    }
+  }
+
+  Remove-VerifiedVercelOutput
+  Invoke-PinnedVercel -Arguments @('pull', '--environment=production', '--project', $vercelProjectId, '--yes')
+  Assert-VercelLinkAndTeam
+  Assert-ReleaseGitState
+  Assert-CanonicalDeployment $previousDeploymentId
+  try {
+    Invoke-PinnedVercel -Arguments @('build', '--prod', '--project', $vercelProjectId, '--yes')
+    if (-not (Test-Path -LiteralPath '.vercel/output/config.json' -PathType Leaf)) {
+      throw 'Vercel prebuilt output/config.json이 없습니다.'
+    }
+    Assert-VercelLinkAndTeam
+    Assert-ReleaseGitState
+    Assert-CanonicalDeployment $previousDeploymentId
+    $deployEnvelope = Invoke-PinnedVercelJson -Arguments @(
+      'deploy', '--prebuilt', '--prod', '--skip-domain', '--json',
+      '--meta', "releaseCommit=$releaseSha", '--project', $vercelProjectId, '--yes'
+    )
+    if ($deployEnvelope.status -and $deployEnvelope.status -ne 'ok') { throw 'Vercel deploy JSON status 실패' }
+    $stagedDeployment = if ($deployEnvelope.deployment) { $deployEnvelope.deployment } else { $deployEnvelope }
+    $stagedDeploymentId = [string]$stagedDeployment.id
+    try { $stagedUri = [uri]$stagedDeployment.url } catch { throw 'staged deployment URL 파싱 실패' }
+    $stagedDeploymentUrl = $stagedUri.AbsoluteUri.TrimEnd('/')
+    if ($stagedDeploymentId -notmatch '^dpl_[A-Za-z0-9]+$' -or $stagedUri.Scheme -ne 'https' -or
+        $stagedDeployment.target -ne 'production' -or $stagedDeployment.readyState -ne 'READY') {
+      throw 'staged deploy JSON 검증 실패'
+    }
+    $stagedInspection = Invoke-PinnedVercelJson -Arguments @(
+      'inspect', $stagedDeploymentId, '--json', '--wait', '--timeout', '3m'
+    )
+    if ($stagedInspection.id -ne $stagedDeploymentId -or $stagedInspection.url -ne $stagedUri.Host -or
+        $stagedInspection.target -ne 'production' -or $stagedInspection.readyState -ne 'READY') {
+      throw 'staged deployment inspect --wait 검증 실패'
+    }
+    $stagedApi = Get-VercelDeploymentApi $stagedDeploymentId
+    if ($stagedApi.id -ne $stagedDeploymentId -or $stagedApi.url -ne $stagedUri.Host -or
+        $stagedApi.projectId -ne $vercelProjectId -or $stagedApi.ownerId -ne $vercelTeamId -or
+        $stagedApi.target -ne 'production' -or $stagedApi.readyState -ne 'READY' -or
+        $stagedApi.meta.releaseCommit -ne $releaseSha -or @($stagedApi.alias) -contains $canonicalAlias) {
+      throw 'staged deployment API/project/meta/skip-domain 검증 실패'
+    }
+    foreach ($observedCommit in @([string]$stagedApi.gitSource.sha, [string]$stagedApi.meta.githubCommitSha)) {
+      if (-not [string]::IsNullOrWhiteSpace($observedCommit) -and $observedCommit -ne $releaseSha) {
+        throw 'Vercel optional Git metadata가 releaseSha와 다릅니다.'
+      }
+    }
+    Assert-ReleaseGitState
+    Assert-CanonicalDeployment $previousDeploymentId
+    & pnpm dlx vercel@59.5.0 curl '/' --deployment $stagedDeploymentId --yes `
+      --scope $vercelScope --non-interactive -- --fail --silent --show-error --output NUL
+    if ($LASTEXITCODE -ne 0) { throw 'staged deployment HTTP health check 실패' }
+  } finally {
+    Remove-VerifiedVercelOutput
   }
   ```
 
-  Never run Playwright/local E2E with production Supabase variables. Generate a nonce first, enter an exact disposable email containing that nonce, and create only that account in the deployed app after `$smokeStartedAt` is recorded. Manually verify the seven-step flow, list/detail, Tera/Gmax, stats, and PP. Do not paste an auth or Pokémon UUID: the service-role cleanup resolves the exact email, verifies its creation time, and reads its owned Pokémon IDs before any deletion. Set `$smokeFlowPassed = 'passed'` only after every UI check succeeds.
+  Never run Playwright/local E2E with production Supabase variables. Open only the exact immutable `$stagedDeploymentUrl`, never the canonical alias, and confirm the target string before creating data. Generate a nonce first, enter an exact disposable email containing that nonce, and create only that account in the staged app after `$smokeStartedAt` is recorded. Manually verify the seven-step flow, list/detail, Tera/Gmax, stats, and PP. Do not paste an auth or Pokémon UUID: the service-role cleanup resolves the exact email, verifies its creation time, and reads its owned Pokémon IDs before any deletion. Set `$smokeFlowPassed = 'passed'` only after every UI check succeeds.
 
   Before server cleanup, sign out the disposable session and clear its browser cookies/local storage because deleting an auth user does not revoke an already-issued JWT. Confirm that separately from the UI checks. The service-role client recursively enumerates only the server-verified `<smoke-user-uuid>/` prefix inside `private-pokemon-images`, removes the returned paths, hard-deletes that auth user so FK cascades finish, and only then deletes audit rows for that exact UUID. It never deletes `storage.objects` directly. Cleanup/API/temp-file failures are collected so the six-category residue query still runs whenever the authenticated identity was resolved; if no identity can be authenticated, stop without deleting any user. Flow and browser assertions run only after cleanup and proof:
 
   ```powershell
+  $stagedSmokeScript = {
+  try {
+  Assert-CanonicalDeployment $previousDeploymentId
   $smokeFlowPassed = 'not-passed'
   $smokeBrowserCleared = 'not-cleared'
+  $openedSmokeTarget = (Read-Host "브라우저에서 정확히 $stagedDeploymentUrl 을 열었다면 해당 URL을 다시 입력").TrimEnd('/')
+  if ($openedSmokeTarget -ne $stagedDeploymentUrl) {
+    throw 'smoke 브라우저 대상이 staged deployment URL과 다릅니다.'
+  }
   $smokeNonce = "pokemon-release-smoke-$([guid]::NewGuid().ToString('N'))"
   $smokeEmail = (Read-Host "사용할 disposable email 입력(반드시 $smokeNonce 포함)").Trim().ToLowerInvariant()
   if ([string]::IsNullOrWhiteSpace($smokeEmail) -or -not $smokeEmail.Contains($smokeNonce)) {
@@ -1012,7 +1274,7 @@
   $verifiedSmokePokemonIds = @()
   $cleanupRows = @()
   try {
-    # 지금부터 deployed app에서 위 email로 계정 하나만 만들고 정확히 한 마리를 저장·검증한다.
+    # 지금부터 $stagedDeploymentUrl 앱에서 위 email로 계정 하나만 만들고 정확히 한 마리를 저장·검증한다.
     $smokeConfirmation = (Read-Host '7단계/목록/상세/Tera/Gmax/stats/PP를 모두 확인했다면 VERIFIED 입력').Trim()
     if ($smokeConfirmation -cne 'VERIFIED') { throw 'production smoke 수동 검증이 완료되지 않았습니다.' }
     $smokeFlowPassed = 'passed'
@@ -1190,29 +1452,158 @@
     if ($cleanupErrors.Count) { throw ($cleanupErrors -join '; ') }
   }
   if ($smokeFlowPassed -ne 'passed' -or $smokeBrowserCleared -ne 'cleared' -or
-      @($verifiedSmokePokemonIds).Count -ne 1) {
+      @($verifiedSmokePokemonIds).Count -ne 1 -or $cleanupRows.Count -ne 1 -or
+      @('auth_users','owned','moves','images','audit','storage').Where({
+        [int]$cleanupRows[0].PSObject.Properties[$_].Value -ne 0
+      }).Count -ne 0) {
     throw 'production smoke UI/browser 검증 또는 서버 유도 Pokemon 1건 검증이 완료되지 않았습니다.'
+  }
+  } catch {
+    $smokeFailure = $_.Exception
+    try { Assert-CanonicalDeployment $previousDeploymentId }
+    catch {
+      throw "staged smoke 실패: $($smokeFailure.Message); canonical previous-ID 검증도 실패: $($_.Exception.Message)"
+    }
+    throw $smokeFailure
+  }
+  }
+  . $stagedSmokeScript
+  ```
+
+  Re-authenticate the staged deployment and require the same explicit release metadata immediately before promotion. Confirm that the canonical alias still targets the pinned previous deployment, then promote the staged deployment ID. Because `promote` has no JSON mode in CLI 59.5.0, verify the result through cached-auth project/deployment API calls plus canonical `inspect`. If promotion starts and any promotion/post-promotion check fails, roll back to the pinned previous deployment ID and verify the canonical alias again. A failure before promotion must leave the canonical alias on the previous ID:
+
+  ```powershell
+  $promotionRequested = $false
+  try {
+    Assert-ReleaseGitState
+    Assert-VercelLinkAndTeam
+    Assert-CanonicalDeployment $previousDeploymentId
+    $stagedApi = Get-VercelDeploymentApi $stagedDeploymentId
+    if ($stagedApi.projectId -ne $vercelProjectId -or $stagedApi.ownerId -ne $vercelTeamId -or
+        $stagedApi.target -ne 'production' -or $stagedApi.readyState -ne 'READY' -or
+        $stagedApi.meta.releaseCommit -ne $releaseSha -or @($stagedApi.alias) -contains $canonicalAlias) {
+      throw 'promotion 직전 staged deployment 인증 실패'
+    }
+    if ($smokeFlowPassed -ne 'passed' -or $smokeBrowserCleared -ne 'cleared' -or
+        @($verifiedSmokePokemonIds).Count -ne 1 -or $cleanupRows.Count -ne 1 -or
+        @('auth_users','owned','moves','images','audit','storage').Where({
+          [int]$cleanupRows[0].PSObject.Properties[$_].Value -ne 0
+        }).Count -ne 0) {
+      throw 'promotion 직전 staged smoke/cleanup gate 실패'
+    }
+    $promotionRequested = $true
+    Invoke-PinnedVercel -Arguments @('promote', $stagedDeploymentId, '--yes', '--timeout', '3m')
+    Assert-CanonicalDeployment $stagedDeploymentId
+    $promotedDeploymentId = $stagedDeploymentId
+    $promotedApi = Get-VercelDeploymentApi $promotedDeploymentId
+    if ($promotedApi.id -ne $promotedDeploymentId -or $promotedApi.projectId -ne $vercelProjectId -or
+        $promotedApi.ownerId -ne $vercelTeamId -or $promotedApi.target -ne 'production' -or
+        $promotedApi.readyState -ne 'READY' -or $promotedApi.meta.releaseCommit -ne $releaseSha -or
+        @($promotedApi.alias) -notcontains $canonicalAlias) {
+      throw 'promote 후 canonical/API 검증 실패'
+    }
+    foreach ($observedCommit in @([string]$promotedApi.gitSource.sha, [string]$promotedApi.meta.githubCommitSha)) {
+      if (-not [string]::IsNullOrWhiteSpace($observedCommit) -and $observedCommit -ne $releaseSha) {
+        throw 'promote 후 optional Git metadata가 releaseSha와 다릅니다.'
+      }
+    }
+    Assert-ReleaseGitState
+  } catch {
+    $releaseFailure = $_.Exception
+    if ($promotionRequested) {
+      try { Invoke-PinnedRollback }
+      catch { throw "release 실패: $($releaseFailure.Message); pinned rollback도 실패: $($_.Exception.Message)" }
+    } else {
+      Assert-CanonicalDeployment $previousDeploymentId
+    }
+    throw $releaseFailure
   }
   ```
 
-  If application deployment fails, restore the prior Vercel production deployment while leaving the backward-compatible nullable/defaulted database additions in place; never delete existing user rows as rollback.
+  Database changes remain in place if application deployment fails; never delete existing user rows as rollback. The only Vercel rollback target is the previously pinned deployment ID and URL.
 
 - [ ] **Step 9: Record final evidence**
 
-  Re-run the ref/SHA/clean checks and write evidence only to ignored `.reference-data`; do not create a tracked evidence commit after the SHA that was published and deployed. Record the migration, candidate/report/core hashes, pre/post-migration snapshots, exact postflight/RLS result, Vercel source SHA/READY metadata, and all six cleanup zeros:
+  Re-run the ref/SHA/project/team/clean checks and write evidence only to ignored `.reference-data`; do not create a tracked evidence commit after the SHA that was published and deployed. Record the migration, candidate/report/core hashes, pre/post-migration snapshots, exact publication and both RLS postflights, the pinned previous/staged/promoted Vercel IDs and URLs, authoritative `meta.releaseCommit`, canonical identity, and all six cleanup zeros. Do not use nullable `gitSource.sha` as release evidence:
 
   ```powershell
-  $finalRemoteSha = ((git ls-remote origin refs/heads/feat/pokemon-trainer-manager-mvp) -split '\s+')[0]
-  if ((git rev-parse HEAD).Trim() -ne $releaseSha -or $finalRemoteSha -ne $releaseSha -or
-      (git status --porcelain) -or (Get-Content -LiteralPath 'supabase/.temp/project-ref' -Raw).Trim() -ne 'ipbqrgsdkoqtuqgnewrs') {
-    throw 'final evidence SHA/ref/worktree precondition 실패'
+  Assert-ReleaseGitState
+  Assert-VercelLinkAndTeam
+  Assert-CanonicalDeployment $promotedDeploymentId
+  if (Test-Path -LiteralPath '.vercel/output') { throw 'final evidence 전에 .vercel/output이 남아 있습니다.' }
+  if ((Get-Content -LiteralPath 'supabase/.temp/project-ref' -Raw).Trim() -ne 'ipbqrgsdkoqtuqgnewrs') {
+    throw 'final evidence linked Supabase ref 불일치'
   }
-  if ($cleanupRows.Count -ne 1 -or $rlsPostflight -ne 'passed' -or $smokeFlowPassed -ne 'passed' -or
-      $smokeBrowserCleared -ne 'cleared' -or @($verifiedSmokePokemonIds).Count -ne 1 -or
-      $deployment.readyState -ne 'READY' -or
-      $deployment.gitSource.sha -ne $releaseSha -or
+  $finalRemoteLines = @(& git ls-remote origin "refs/heads/$releaseBranch")
+  if ($LASTEXITCODE -ne 0 -or $finalRemoteLines.Count -ne 1) { throw 'final remote SHA 조회 실패' }
+  $finalRemoteMatch = [regex]::Match(
+    $finalRemoteLines[0],
+    "^([0-9a-f]{40})\s+$([regex]::Escape("refs/heads/$releaseBranch"))$"
+  )
+  if (-not $finalRemoteMatch.Success) { throw 'final remote SHA 응답 형식 불일치' }
+  $finalRemoteSha = $finalRemoteMatch.Groups[1].Value
+  if ($finalRemoteSha -ne $releaseSha) { throw 'final remote SHA가 release SHA와 다릅니다.' }
+
+  $finalPostRows = @(Invoke-LinkedJsonQuery $postflightSql)
+  if ($finalPostRows.Count -ne 1) { throw 'final active publication은 정확히 한 건이어야 합니다.' }
+  $finalPostflight = $finalPostRows[0]
+  if ($finalPostflight.version -ne 'Cobbleverse 1.7.42+Cobblemon 1.7.3' -or
+      -not $finalPostflight.validator_valid) { throw 'final publication version/validator 불일치' }
+  foreach ($name in @('candidate_digest','authenticated_candidate_digest','trusted_source_digest')) {
+    if ($finalPostflight.PSObject.Properties[$name].Value -ne $candidateDigest) {
+      throw "final publication digest 불일치: $name"
+    }
+  }
+  foreach ($entry in $expectedAfter.GetEnumerator()) {
+    if ([int]$finalPostflight.PSObject.Properties[$entry.Key].Value -ne $entry.Value) {
+      throw "final publication count 불일치: $($entry.Key)"
+    }
+  }
+  Assert-GlobalOptionStagingEmpty 'final evidence'
+
+  $finalCatalogIssues = @(Invoke-LinkedJsonQuery $catalogSql)
+  if ($finalCatalogIssues.Count -ne 0) {
+    throw "final RLS/catalog privilege postflight 실패: $($finalCatalogIssues.issue -join ', ')"
+  }
+  $finalRlsSqlFile = Join-Path ([IO.Path]::GetTempPath()) ("pokemon-final-rls-postflight-{0}.sql" -f [guid]::NewGuid().ToString('N'))
+  try {
+    [IO.File]::WriteAllText($finalRlsSqlFile, $rlsSql, [Text.UTF8Encoding]::new($false))
+    pnpm exec supabase db query --linked --agent no --file $finalRlsSqlFile
+    if ($LASTEXITCODE -ne 0) { throw 'final authenticated RLS postflight 실패' }
+  } finally {
+    if (Test-Path -LiteralPath $finalRlsSqlFile) { Remove-Item -LiteralPath $finalRlsSqlFile -Force }
+    if (Test-Path -LiteralPath "$finalRlsSqlFile.tmp") { Remove-Item -LiteralPath "$finalRlsSqlFile.tmp" -Force }
+  }
+  $finalRlsCatalogPostflight = 'passed'
+  $finalRlsPostflight = 'passed'
+
+  $finalCleanupRows = @(Invoke-LinkedJsonQuery $cleanupProofSql)
+  if ($finalCleanupRows.Count -ne 1 -or
       @('auth_users','owned','moves','images','audit','storage').Where({
-        [int]$cleanupRows[0].PSObject.Properties[$_].Value -ne 0
+        [int]$finalCleanupRows[0].PSObject.Properties[$_].Value -ne 0
+      }).Count -ne 0) { throw 'final production smoke residue 검증 실패' }
+
+  $finalCanonical = Get-CanonicalInspection
+  $finalDeployment = Get-VercelDeploymentApi $promotedDeploymentId
+  $finalProject = Get-VercelProjectApi
+  $expectedProductionAliases = @($finalProject.targets.production.alias)
+  $missingFinalAliases = @($expectedProductionAliases | Where-Object {
+    @($finalCanonical.aliases) -notcontains $_ -or @($finalDeployment.alias) -notcontains $_
+  })
+  if ($cleanupRows.Count -ne 1 -or $finalRlsCatalogPostflight -ne 'passed' -or
+      $finalRlsPostflight -ne 'passed' -or $smokeFlowPassed -ne 'passed' -or
+      $smokeBrowserCleared -ne 'cleared' -or @($verifiedSmokePokemonIds).Count -ne 1 -or
+      $stagedDeploymentId -ne $promotedDeploymentId -or $finalCanonical.id -ne $promotedDeploymentId -or
+      $finalCanonical.url -ne $stagedUri.Host -or $finalCanonical.target -ne 'production' -or
+      $finalCanonical.readyState -ne 'READY' -or $finalDeployment.id -ne $promotedDeploymentId -or
+      $finalDeployment.url -ne $stagedUri.Host -or $finalDeployment.target -ne 'production' -or
+      $finalDeployment.readyState -ne 'READY' -or $finalDeployment.meta.releaseCommit -ne $releaseSha -or
+      $finalDeployment.projectId -ne $vercelProjectId -or $finalDeployment.ownerId -ne $vercelTeamId -or
+      $finalProject.targets.production.id -ne $promotedDeploymentId -or
+      $expectedProductionAliases.Count -eq 0 -or $expectedProductionAliases -notcontains $canonicalAlias -or
+      $missingFinalAliases.Count -ne 0 -or
+      @('auth_users','owned','moves','images','audit','storage').Where({
+        [int]$finalCleanupRows[0].PSObject.Properties[$_].Value -ne 0
       }).Count -ne 0) {
     throw '필수 live evidence가 완전하지 않습니다.'
   }
@@ -1228,17 +1619,25 @@
     coreSqlSha256=$coreSqlHash
     preMigrationSnapshot=$beforeMigration
     postMigrationSnapshot=$afterMigration
-    publicationPostflight=$post
-    rlsPostflight=$rlsPostflight
+    publicationPostflight=$finalPostflight
+    rlsCatalogPostflight=$finalRlsCatalogPostflight
+    rlsPostflight=$finalRlsPostflight
     smokeBrowserCleared=$smokeBrowserCleared
     smokePokemonCount=@($verifiedSmokePokemonIds).Count
-    deploymentId=$deployment.id
-    deploymentUrl=$deployment.url
-    deploymentOwnerId=$deployment.ownerId
-    deploymentState=$deployment.readyState
-    deploymentSourceSha=$deployment.gitSource.sha
+    vercelCliVersion=$vercelCliVersion
+    previousDeploymentId=$previousDeploymentId
+    previousDeploymentUrl=$previousDeploymentUrl
+    stagedDeploymentId=$stagedDeploymentId
+    stagedDeploymentUrl=$stagedDeploymentUrl
+    promotedDeploymentId=$promotedDeploymentId
+    canonicalAlias=$canonicalAlias
+    productionAliases=$expectedProductionAliases
+    canonicalDeploymentId=$finalCanonical.id
+    deploymentOwnerId=$finalDeployment.ownerId
+    deploymentState=$finalDeployment.readyState
+    deploymentReleaseCommit=$finalDeployment.meta.releaseCommit
     smokeFlow=$smokeFlowPassed
-    smokeCleanup=$cleanupRows[0]
+    smokeCleanup=$finalCleanupRows[0]
   }
   $evidencePath = ".reference-data/release-evidence-$releaseSha.json"
   $evidenceTmp = "$evidencePath.tmp"

@@ -75,6 +75,8 @@ alter table public.reference_tera_types enable row level security;
 alter table public.reference_form_tera_options enable row level security;
 alter table public.reference_form_gigantamax_options enable row level security;
 
+revoke all privileges on public.reference_tera_types, public.reference_form_tera_options,
+  public.reference_form_gigantamax_options from anon, authenticated;
 grant all privileges on public.reference_tera_types, public.reference_form_tera_options,
   public.reference_form_gigantamax_options to service_role;
 grant select on public.reference_tera_types, public.reference_form_tera_options,

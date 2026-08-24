@@ -116,8 +116,14 @@ async function stageThenReplacePublicationRows<T>(
   } catch (error) {
     try {
       await cleanup()
-    } catch {
-      // The original staging or replacement failure is the actionable error.
+    } catch (cleanupError) {
+      const originalMessage = error instanceof Error ? error.message : String(error)
+      const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+      throw new AggregateError(
+        [error, cleanupError],
+        `포켓몬 선택 필터 게시 실패: ${originalMessage}; cleanup 실패: ${cleanupMessage}`,
+        { cause: error },
+      )
     }
     throw error
   }

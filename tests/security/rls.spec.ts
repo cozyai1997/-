@@ -17,6 +17,8 @@ type TestIdentity = {
   id: string
 }
 
+type CatalogIssue = { issue: string }
+
 const describeLocalSupabase = process.env.RUN_SUPABASE_INTEGRATION === '1' ? describe : describe.skip
 
 const identities: string[] = []
@@ -63,6 +65,21 @@ function readLocalSupabaseEnvironment(): LocalSupabaseEnvironment {
   }
 
   return values as LocalSupabaseEnvironment
+}
+
+function queryLocalCatalog(sql: string): CatalogIssue[] {
+  const cliPath = resolve(process.cwd(), 'node_modules/supabase/dist/supabase.js')
+  const result = spawnSync(process.execPath, [
+    cliPath,
+    'db', 'query', '--local', '--agent', 'no', '--output-format', 'json', sql,
+  ], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  })
+  if (result.status !== 0) {
+    throw new Error(`로컬 Supabase catalog 조회 실패\n${result.stderr}`)
+  }
+  return JSON.parse(result.stdout) as CatalogIssue[]
 }
 
 async function createIdentity(
@@ -356,6 +373,85 @@ describeLocalSupabase('사용자별 보유 포켓몬 RLS', () => {
     expect(anonymousTeraOptions.error).not.toBeNull()
     expect(anonymousGigantamaxOptions.error).not.toBeNull()
     expect(replacement.error?.code).toBe('42501')
+  })
+
+  it('신규 전투 표와 교체 RPC의 catalog 권한은 active-read와 service-role 실행만 허용한다', () => {
+    const issues = queryLocalCatalog(`
+      with expected_tables(table_name, policy_name) as (values
+        ('reference_tera_types', 'authenticated read active tera types'),
+        ('reference_form_tera_options', 'authenticated read active form tera options'),
+        ('reference_form_gigantamax_options', 'authenticated read active gigantamax options')
+      ), table_state as (
+        select expected.table_name, expected.policy_name, class.oid as table_oid,
+          class.relrowsecurity, policy.oid as policy_oid, policy.polcmd, policy.polroles,
+          policy.polwithcheck, pg_get_expr(policy.polqual, policy.polrelid) as policy_qual,
+          count(policy.oid) over (partition by expected.table_name) as policy_count
+        from expected_tables expected
+        left join pg_namespace namespace on namespace.nspname = 'public'
+        left join pg_class class on class.relnamespace = namespace.oid and class.relname = expected.table_name
+        left join pg_policy policy on policy.polrelid = class.oid
+      ), table_issues as (
+        select 'table:' || table_name || ':missing-or-rls' as issue from table_state
+        where table_oid is null or not coalesce(relrowsecurity, false)
+        union all
+        select 'table:' || table_name || ':policy-count' from table_state where policy_count <> 1
+        union all
+        select 'table:' || table_name || ':policy-contract' from table_state
+        where policy_count = 1 and (
+          (select polname from pg_policy where oid = policy_oid) is distinct from policy_name
+          or polcmd is distinct from 'r'
+          or polwithcheck is not null
+          or (select array_agg(role.rolname order by role.rolname)
+              from unnest(polroles) role_oid
+              join pg_roles role on role.oid = role_oid) is distinct from array['authenticated']::name[]
+          or regexp_replace(policy_qual, '\\s+', '', 'g') not like
+            '%publication.id=' || table_name || '.publication_id%publication.status=''active''::publication_status%'
+        )
+      ), privilege_issues as (
+        select 'privilege:' || expected.table_name || ':' || role.rolname as issue
+        from expected_tables expected cross join pg_roles role
+        where role.rolname in ('anon', 'authenticated') and (
+          has_table_privilege(role.oid, 'public.' || expected.table_name, 'insert')
+          or has_table_privilege(role.oid, 'public.' || expected.table_name, 'update')
+          or has_table_privilege(role.oid, 'public.' || expected.table_name, 'delete')
+          or has_table_privilege(role.oid, 'public.' || expected.table_name, 'truncate')
+          or has_table_privilege(role.oid, 'public.' || expected.table_name, 'references')
+          or has_table_privilege(role.oid, 'public.' || expected.table_name, 'trigger')
+          or (role.rolname = 'anon' and has_table_privilege(role.oid, 'public.' || expected.table_name, 'select'))
+          or (role.rolname = 'authenticated' and not has_table_privilege(role.oid, 'public.' || expected.table_name, 'select'))
+        )
+      ), rpc_state as (
+        select
+          to_regprocedure('public.replace_pokemon_option_filter_reference_data(uuid,uuid,text,text)') as current_rpc,
+          to_regprocedure('public.replace_pokemon_option_filter_reference_data(uuid,uuid)') as old_rpc
+      ), rpc_issues as (
+        select 'rpc:signature' as issue from rpc_state where current_rpc is null or old_rpc is not null
+        union all
+        select 'rpc:execute:' || role.rolname
+        from rpc_state cross join pg_roles role
+        where role.rolname in ('anon', 'authenticated', 'service_role') and (
+          (role.rolname = 'service_role') is distinct from
+          has_function_privilege(role.oid, current_rpc, 'execute')
+        )
+        union all
+        select 'rpc:unexpected-explicit-execute'
+        from rpc_state
+        join pg_proc function on function.oid = current_rpc
+        where exists (
+          select 1
+          from aclexplode(coalesce(function.proacl, acldefault('f', function.proowner))) privilege
+          where privilege.privilege_type = 'EXECUTE'
+            and privilege.grantee <> function.proowner
+            and privilege.grantee <> (select oid from pg_roles where rolname = 'service_role')
+        )
+      )
+      select issue from table_issues
+      union all select issue from privilege_issues
+      union all select issue from rpc_issues
+      order by issue
+    `)
+
+    expect(issues).toEqual([])
   })
 
   it('보유 포켓몬이 있어도 계정을 삭제하고 감사 기록은 보존한다', async () => {

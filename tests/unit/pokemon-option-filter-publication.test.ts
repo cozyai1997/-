@@ -33,7 +33,7 @@ vi.mock('../../scripts/data/import-reference-data', () => ({
 
 function createPublisherHarness(
   candidate: ReferenceDataset,
-  options: { failInsertAt?: number; rpcError?: string } = {},
+  options: { failInsertAt?: number; rpcError?: string; cleanupError?: string } = {},
 ) {
   const publicationId = '00000000-0000-4000-8000-000000000099'
   const databaseRows: Record<string, Array<Record<string, unknown>>> = {
@@ -68,8 +68,10 @@ function createPublisherHarness(
     }),
     delete: vi.fn(() => stagingQuery),
     eq: vi.fn(() => stagingQuery),
-    then(resolve: (value: { error: null }) => unknown) {
-      return Promise.resolve({ error: null }).then(resolve)
+    then(resolve: (value: { error: { message: string } | null }) => unknown) {
+      return Promise.resolve({
+        error: options.cleanupError ? { message: options.cleanupError } : null,
+      }).then(resolve)
     },
   }
   const selectQuery = (table: string) => ({
@@ -427,5 +429,59 @@ describe('포켓몬 선택 필터 게시', () => {
 
     expect(rpc).toHaveBeenCalledOnce()
     expect(stagingQuery.delete).toHaveBeenCalledOnce()
+  }, 30_000)
+
+  it('스테이징과 cleanup이 모두 실패하면 원래 오류와 cleanup 오류를 함께 반환한다', async () => {
+    const candidate = createProductionReferenceCandidate()
+    sourceMock.trustedDataset = structuredClone(candidate)
+    const { client, publicationId, rpc, stagingQuery } = createPublisherHarness(candidate, {
+      failInsertAt: 2,
+      cleanupError: 'cleanup failed after staging',
+    })
+
+    const rejection = await publishPokemonOptionFilterReferenceData(
+      candidate, 'trusted-source', client as never,
+    ).then(() => null, (error: unknown) => error)
+
+    expect(rejection).toBeInstanceOf(AggregateError)
+    const aggregate = rejection as AggregateError & { cause?: unknown }
+    expect(aggregate.errors.map((error) => (error as Error).message)).toEqual([
+      'reference_option_filter_publication_staging 게시 실패: second batch failed',
+      '포켓몬 선택 필터 스테이징 정리 실패: cleanup failed after staging',
+    ])
+    expect(aggregate.cause).toBe(aggregate.errors[0])
+    const stagedBatchId = (stagingQuery.insert.mock.calls[0][0] as Array<{ batch_id: string }>)[0].batch_id
+    expect(stagingQuery.eq.mock.calls).toEqual([
+      ['batch_id', stagedBatchId],
+      ['publication_id', publicationId],
+    ])
+    expect(rpc).not.toHaveBeenCalled()
+  }, 30_000)
+
+  it('RPC와 cleanup이 모두 실패하면 원래 오류와 cleanup 오류를 함께 반환한다', async () => {
+    const candidate = createProductionReferenceCandidate()
+    sourceMock.trustedDataset = structuredClone(candidate)
+    const { client, publicationId, rpc, stagingQuery } = createPublisherHarness(candidate, {
+      rpcError: 'replacement RPC failed',
+      cleanupError: 'cleanup failed after RPC',
+    })
+
+    const rejection = await publishPokemonOptionFilterReferenceData(
+      candidate, 'trusted-source', client as never,
+    ).then(() => null, (error: unknown) => error)
+
+    expect(rejection).toBeInstanceOf(AggregateError)
+    const aggregate = rejection as AggregateError & { cause?: unknown }
+    expect(aggregate.errors.map((error) => (error as Error).message)).toEqual([
+      '포켓몬 선택 필터 교체 실패: replacement RPC failed',
+      '포켓몬 선택 필터 스테이징 정리 실패: cleanup failed after RPC',
+    ])
+    expect(aggregate.cause).toBe(aggregate.errors[0])
+    const stagedBatchId = (stagingQuery.insert.mock.calls[0][0] as Array<{ batch_id: string }>)[0].batch_id
+    expect(stagingQuery.eq.mock.calls).toEqual([
+      ['batch_id', stagedBatchId],
+      ['publication_id', publicationId],
+    ])
+    expect(rpc).toHaveBeenCalledOnce()
   }, 30_000)
 })
