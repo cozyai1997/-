@@ -216,12 +216,18 @@ a {
 }
 
 .sidebar a,
+.sidebar-disabled,
 .logout-button {
   border-radius: 0.65rem;
   padding: 0.75rem 0.85rem;
   color: var(--muted);
   text-align: left;
   text-decoration: none;
+}
+
+.sidebar-disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .sidebar a:hover,
@@ -1016,7 +1022,8 @@ kbd {
     display: flex;
   }
 
-  .sidebar a {
+  .sidebar a,
+  .sidebar-disabled {
     white-space: nowrap;
   }
 
